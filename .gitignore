@@ -43,3 +43,11 @@ tmp/
 iso/
 downloaded_iso_path/
 **/packer_cache/
+*.pfx
+*.kubeconfig
+*.tfvars
+*.tfvars.json
+*_apikey.txt
+pw.txt
+password*.txt
+credentials*.txt
