@@ -1,0 +1,10 @@
+title = "homelab gitleaks config"
+
+[allowlist]
+description = "Ignore local environment files and generated local state"
+paths = [
+  '''(^|/)\.env(rc)?$''',
+  '''(^|/)\.env\..*$''',
+  '''(^|/)\.venv/''',
+  '''(^|/)\.work/''',
+]

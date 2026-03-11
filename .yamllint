@@ -1,0 +1,9 @@
+extends: default
+ignore: |
+  .git/
+  .venv/
+rules:
+  line-length:
+    max: 160
+    level: warning
+  truthy: disable

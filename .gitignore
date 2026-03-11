@@ -1,0 +1,45 @@
+# Local env and secrets
+.env
+.env.*
+!.env.example
+.envrc
+*.pem
+*.key
+*.p12
+
+# Python
+.venv/
+venv/
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.mypy_cache/
+
+# Ansible
+.ansible/
+*.retry
+
+# Terraform
+.terraform/
+*.tfstate
+*.tfstate.*
+crash.log
+override.tf
+override.tf.json
+*_override.tf
+*_override.tf.json
+
+# Tooling/OS
+.DS_Store
+.vscode/
+.idea/
+
+# Runtime/temp
+*.log
+tmp/
+.work/
+
+# Large local build artifacts
+iso/
+downloaded_iso_path/
+**/packer_cache/

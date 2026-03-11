@@ -1,0 +1,5 @@
+ansible==8.*
+ansible-lint
+ansible-core==2.15.*
+proxmoxer==2.*
+requests==2.*

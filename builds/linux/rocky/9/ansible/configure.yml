@@ -1,0 +1,89 @@
+---
+- name: Template cleanup
+  hosts: all
+  become: true
+  gather_facts: false
+  tasks:
+    - name: Install Cloud-Init package
+      ansible.builtin.dnf:
+        name: cloud-init
+        state: present
+
+    - name: Enable Cloud-Init service
+      ansible.builtin.systemd:
+        name: cloud-init
+        enabled: true
+
+    - name: Install custom CA certificates
+      ansible.builtin.copy:
+        src: "{{ item }}"
+        dest: "/etc/pki/ca-trust/source/anchors/{{ item | basename }}"
+        owner: root
+        group: root
+        mode: "0644"
+      loop: "{{ lookup('fileglob', playbook_dir ~ '/../../../../../ca/*', wantlist=True) }}"
+
+    - name: Update CA trust store
+      ansible.builtin.command: update-ca-trust
+      changed_when: true
+
+    - name: Find SSH host keys
+      ansible.builtin.find:
+        paths: /etc/ssh
+        patterns: "ssh_host_*key*"
+        file_type: file
+      register: ssh_host_keys
+
+    - name: Remove SSH host keys
+      ansible.builtin.file:
+        path: "{{ item.path }}"
+        state: absent
+      loop: "{{ ssh_host_keys.files }}"
+
+    - name: Reset machine-id
+      ansible.builtin.copy:
+        content: ""
+        dest: /etc/machine-id
+        owner: root
+        group: root
+        mode: "0444"
+
+    - name: Ensure machine-id file exists
+      ansible.builtin.file:
+        path: /etc/machine-id
+        state: touch
+        owner: root
+        group: root
+        mode: "0444"
+
+    - name: Remove dbus machine-id
+      ansible.builtin.file:
+        path: /var/lib/dbus/machine-id
+        state: absent
+
+    - name: Ensure dbus directory exists
+      ansible.builtin.file:
+        path: /var/lib/dbus
+        state: directory
+        owner: root
+        group: root
+        mode: "0755"
+
+    - name: Link dbus machine-id to /etc/machine-id
+      ansible.builtin.file:
+        src: /etc/machine-id
+        dest: /var/lib/dbus/machine-id
+        state: link
+
+    - name: Clear cloud-init instance IDs
+      ansible.builtin.file:
+        path: "{{ item }}"
+        state: absent
+      loop:
+        - /var/lib/cloud/instance-id
+        - /var/lib/cloud/instance-id.old
+
+    - name: Remove persistent net rules
+      ansible.builtin.file:
+        path: /etc/udev/rules.d/70-persistent-net.rules
+        state: absent
