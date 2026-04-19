@@ -50,7 +50,7 @@ jobs:
         run: |
           set -euo pipefail
           sudo apt-get update
-          sudo apt-get install -y --no-install-recommends sshpass
+          sudo apt-get install -y --no-install-recommends ca-certificates sshpass
           vault_version="1.19.5"
           curl -fsSLo /tmp/vault.zip "https://releases.hashicorp.com/vault/${vault_version}/vault_${vault_version}_linux_amd64.zip"
           sudo unzip -o /tmp/vault.zip vault -d /usr/local/bin
@@ -58,7 +58,11 @@ jobs:
 
       - name: Write Vault CA certificate
         shell: bash
-        run: printf '%s' "${{ secrets.VAULT_CACERT }}" > /tmp/vault-ca.pem
+        run: |
+          set -euo pipefail
+          printf '%s' "${{ secrets.VAULT_CACERT }}" > /tmp/vault-ca.pem
+          sudo install -m 0644 /tmp/vault-ca.pem /usr/local/share/ca-certificates/vault-viking-org.crt
+          sudo update-ca-certificates
 
       - name: Install build dependencies
         shell: bash
