@@ -36,7 +36,8 @@ autoinstall:
         lock_passwd: false
         passwd: ${root_password_hash}
         ssh_authorized_keys:
-          - ${ssh_public_key_root}
+          - ${ssh_public_key_root_authorized}
+          - ${ssh_public_key_build}
       - name: ${build_username}
         sudo: ALL=(ALL) NOPASSWD:ALL
         primary_group: ${build_username}
@@ -46,6 +47,7 @@ autoinstall:
         passwd: ${build_password_hash}
         ssh_authorized_keys:
           - ${ssh_public_key_build}
+          - ${ssh_public_key_root_authorized}
   late-commands:
     - curtin in-target -- sed -i 's/^#\?PermitRootLogin.*/PermitRootLogin yes/' /etc/ssh/sshd_config
     - curtin in-target -- sed -i 's/^#\?PasswordAuthentication.*/PasswordAuthentication yes/' /etc/ssh/sshd_config

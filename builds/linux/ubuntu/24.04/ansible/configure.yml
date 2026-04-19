@@ -17,12 +17,11 @@
 
     - name: Install custom CA certificates
       ansible.builtin.copy:
-        src: "{{ item }}"
-        dest: "/usr/local/share/ca-certificates/{{ item | basename }}"
+        content: "{{ lookup('community.hashi_vault.hashi_vault', 'secret/data/ca auth_method=token validate_certs=False')['bundle'] }}"
+        dest: /usr/local/share/ca-certificates/homelab-ca-bundle.crt
         owner: root
         group: root
         mode: "0644"
-      loop: "{{ lookup('fileglob', playbook_dir ~ '/../../../../../ca/*', wantlist=True) }}"
 
     - name: Update CA trust store
       ansible.builtin.command: update-ca-certificates

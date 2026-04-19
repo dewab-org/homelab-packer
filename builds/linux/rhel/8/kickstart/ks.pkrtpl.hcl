@@ -34,8 +34,10 @@ rootpw --iscrypted ${root_password_hash}
 user --name=${build_username} --password=${build_password_hash} --iscrypted --gecos="Packer User" --groups=wheel
 
 # Authorize SSH key for root.
-sshkey --username=root "${ssh_public_key_root}"
+sshkey --username=root "${ssh_public_key_root_authorized}"
+sshkey --username=root "${ssh_public_key_build}"
 sshkey --username=${build_username} "${ssh_public_key_build}"
+sshkey --username=${build_username} "${ssh_public_key_root_authorized}"
 
 # Sets the state of SELinux on the installed system.
 # Defaults to enforcing.
@@ -76,8 +78,9 @@ logvol swap --vgname=rhel --name=swap --thin --poolname=thinpool --size=4096 --f
 %packages --excludedocs
 @^minimal-environment
 qemu-guest-agent
+cloud-init
 python3
-python38
+python39
 zsh
 git
 nfs-utils
@@ -95,11 +98,22 @@ sssd
 # Post-installation commands.
 %post --log=/root/ks-post.log
 # Ensure password auth is enabled for installer SSH access.
-cat > /etc/ssh/sshd_config.d/90-packer.conf <<'SSHCONF'
-PermitRootLogin yes
-PasswordAuthentication yes
-Subsystem sftp /usr/libexec/openssh/sftp-server
-SSHCONF
+sed -ri 's/^#?PermitRootLogin .*/PermitRootLogin yes/' /etc/ssh/sshd_config
+if ! grep -q '^PermitRootLogin yes$' /etc/ssh/sshd_config; then
+  echo 'PermitRootLogin yes' >> /etc/ssh/sshd_config
+fi
+
+sed -ri 's/^#?PasswordAuthentication .*/PasswordAuthentication yes/' /etc/ssh/sshd_config
+if ! grep -q '^PasswordAuthentication yes$' /etc/ssh/sshd_config; then
+  echo 'PasswordAuthentication yes' >> /etc/ssh/sshd_config
+fi
+
+install -d -m 0700 -o ${build_username} -g ${build_username} /home/${build_username}/.ssh
+cat > /home/${build_username}/.ssh/authorized_keys <<'EOF_AUTHORIZED_KEYS'
+${ssh_public_key_build}
+EOF_AUTHORIZED_KEYS
+chown ${build_username}:${build_username} /home/${build_username}/.ssh/authorized_keys
+chmod 0600 /home/${build_username}/.ssh/authorized_keys
 
 systemctl enable qemu-guest-agent
 systemctl restart sshd

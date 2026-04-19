@@ -1,25 +1,29 @@
 #!/usr/bin/env python3
-import argparse
+from __future__ import annotations
+
 import os
+import sys
+from pathlib import Path
+
+if __name__ == "__main__":
+    _venv_python = Path(__file__).resolve().parent / ".venv" / "bin" / "python3"
+    if _venv_python.is_file() and os.access(_venv_python, os.X_OK) and sys.executable != str(_venv_python):
+        os.execv(str(_venv_python), [str(_venv_python)] + sys.argv)
+
+import argparse
+import json
 import re
 import signal
 import subprocess
-import sys
-from pathlib import Path
+import tempfile
+from typing import TYPE_CHECKING
 from urllib.parse import urlparse
 
-from proxmoxer import ProxmoxAPI
+if TYPE_CHECKING:
+    from proxmoxer import ProxmoxAPI
 
 
-BUILDS = [
-    "builds/linux/rhel/8",
-    "builds/linux/rhel/9",
-    "builds/linux/rhel/10",
-    "builds/linux/rocky/8",
-    "builds/linux/rocky/9",
-    "builds/linux/rocky/10",
-    "builds/linux/ubuntu/24.04",
-]
+BUILD_BLOCK_RE = re.compile(r"^\s*build\s*{", re.MULTILINE)
 
 
 def parse_args() -> argparse.Namespace:
@@ -45,6 +49,46 @@ def repo_root() -> Path:
     return Path(__file__).resolve().parent
 
 
+def ensure_venv_bin_on_path() -> None:
+    venv_bin = repo_root() / ".venv" / "bin"
+    if not venv_bin.is_dir():
+        return
+
+    current_path = os.environ.get("PATH", "")
+    path_parts = current_path.split(os.pathsep) if current_path else []
+    venv_bin_str = str(venv_bin)
+    if venv_bin_str not in path_parts:
+        os.environ["PATH"] = os.pathsep.join([venv_bin_str, *path_parts]) if path_parts else venv_bin_str
+
+
+def list_build_dirs() -> list[str]:
+    builds_root = repo_root() / "builds"
+    build_dirs: list[str] = []
+
+    build_files = sorted(
+        builds_root.glob("**/build.pkr.hcl"),
+        key=lambda path: tuple(
+            int(part) if part.isdigit() else part
+            for part in path.parent.relative_to(repo_root()).parts
+        ),
+    )
+
+    for build_file in build_files:
+        build_dir = build_file.parent
+        build_vars = build_dir / "variables.auto.pkrvars.hcl"
+
+        # Keep "all" aligned to the buildable templates only. Stub directories
+        # do not have per-build vars and may omit a real build block.
+        if not build_vars.exists():
+            continue
+        if not BUILD_BLOCK_RE.search(build_file.read_text()):
+            continue
+
+        build_dirs.append(str(build_dir.relative_to(repo_root())))
+
+    return build_dirs
+
+
 def parse_template_name(build_file: Path) -> str:
     if not build_file.exists():
         return ""
@@ -59,9 +103,30 @@ def parse_vm_id(build_vars: Path) -> str:
     return match.group(1) if match else ""
 
 
+def vault_secret_data(path: str = "secret/packer") -> dict[str, str]:
+    output = subprocess.check_output(
+        ["vault", "kv", "get", "-format=json", path],
+        text=True,
+    )
+    return json.loads(output)["data"]["data"]
 
 
-def proxmox_client() -> ProxmoxAPI | None:
+def write_build_ssh_key() -> str:
+    secret_data = vault_secret_data()
+    private_key = secret_data["SSH_PRIVATE_KEY_BUILD"]
+    public_key = secret_data["SSH_PUBLIC_KEY_BUILD"]
+
+    tmpdir = Path(tempfile.mkdtemp(prefix="packer-ssh-key-"))
+    key_path = tmpdir / "id_ed25519"
+    key_path.write_text(private_key)
+    os.chmod(key_path, 0o600)
+    key_path.with_suffix(".pub").write_text(f"{public_key}\n")
+    return str(key_path)
+
+
+
+
+def proxmox_client() -> "ProxmoxAPI | None":
     url = os.environ.get("PROXMOX_URL", "")
     user = os.environ.get("PROXMOX_USERNAME", "")
     password = os.environ.get("PROXMOX_PASSWORD", "")
@@ -71,6 +136,8 @@ def proxmox_client() -> ProxmoxAPI | None:
     parsed = urlparse(url)
     if not parsed.scheme or not parsed.hostname:
         return None
+
+    from proxmoxer import ProxmoxAPI
 
     port = parsed.port or (443 if parsed.scheme == "https" else 80)
     return ProxmoxAPI(
@@ -113,6 +180,7 @@ def run_packer(build_dir: Path, common_vars: Path, args: argparse.Namespace) -> 
     packer_args.append(f"-var-file={common_vars}")
     if build_vars.exists():
         packer_args.append(f"-var-file={build_vars}")
+    packer_args.append(f"-var=ssh_private_key_file={write_build_ssh_key()}")
     packer_args.append(str(build_dir))
     proc = subprocess.Popen(packer_args)
     try:
@@ -152,6 +220,7 @@ def run_build(build_dir: Path, common_vars: Path, args: argparse.Namespace) -> i
 
 def main() -> int:
     args = parse_args()
+    ensure_venv_bin_on_path()
     root = repo_root()
     common_vars = root / "variables.auto.pkrvars.hcl"
 
@@ -160,7 +229,7 @@ def main() -> int:
         return 1
 
     if args.target == "all":
-        for build in BUILDS:
+        for build in list_build_dirs():
             status = run_build(root / build, common_vars, args)
             if status != 0:
                 return status

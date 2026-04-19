@@ -1,0 +1,127 @@
+name: build-templates
+
+on:
+  push:
+  workflow_dispatch:
+    inputs:
+      build_mode:
+        description: How to handle existing templates or VMIDs in Proxmox
+        required: false
+        default: overwrite
+        type: choice
+        options:
+          - overwrite
+          - skip
+          - default
+
+permissions:
+  contents: read
+
+concurrency:
+  group: packer-target-environment
+  cancel-in-progress: false
+
+jobs:
+  build:
+    name: Build all templates
+    runs-on:
+      - self-hosted
+      - arc
+    timeout-minutes: 720
+    env:
+      VAULT_ADDR: ${{ vars.VAULT_ADDR }}
+      VAULT_TOKEN: ${{ secrets.VAULT_TOKEN }}
+      VAULT_CACERT: /tmp/vault-ca.pem
+      PACKER_LOG: "1"
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Set up Packer
+        uses: hashicorp/setup-packer@main
+        with:
+          version: "1.15.1"
+
+      - name: Install runner dependencies
+        shell: bash
+        run: |
+          set -euo pipefail
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends sshpass
+
+      - name: Write Vault CA certificate
+        shell: bash
+        run: printf '%s' "${{ secrets.VAULT_CACERT }}" > /tmp/vault-ca.pem
+
+      - name: Install build dependencies
+        shell: bash
+        run: |
+          set -euo pipefail
+          python -m venv .venv
+          . .venv/bin/activate
+          python -m pip install --upgrade pip
+          python -m pip install -r requirements.txt
+          ansible-galaxy collection install -r requirements.yml
+
+      - name: Verify toolchain
+        shell: bash
+        run: |
+          set -euo pipefail
+          . .venv/bin/activate
+          python --version
+          ansible --version
+          ansible-playbook --version
+          ansible-galaxy --version
+          packer version
+          sshpass -V
+
+      - name: Initialize packer plugins
+        shell: bash
+        run: |
+          set -euo pipefail
+          . .venv/bin/activate
+          mapfile -t builds < <(python - <<'PY'
+          import build
+
+          for build_dir in build.list_build_dirs():
+              print(build_dir)
+          PY
+          )
+
+          for build_dir in "${builds[@]}"; do
+            packer init "$build_dir"
+          done
+
+      - name: Build templates
+        shell: bash
+        run: |
+          set -euo pipefail
+          . .venv/bin/activate
+
+          build_mode="${{ github.event.inputs.build_mode }}"
+          if [ -z "$build_mode" ]; then
+            build_mode="overwrite"
+          fi
+
+          args=()
+          case "$build_mode" in
+            overwrite)
+              args+=(--overwrite)
+              ;;
+            skip)
+              args+=(--skip)
+              ;;
+            default)
+              ;;
+            *)
+              echo "Unsupported build mode: $build_mode" >&2
+              exit 1
+              ;;
+          esac
+
+          ./build.py "${args[@]}" all

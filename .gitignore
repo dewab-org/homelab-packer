@@ -3,6 +3,7 @@
 .env.*
 !.env.example
 .envrc
+ca/
 *.pem
 *.key
 *.p12

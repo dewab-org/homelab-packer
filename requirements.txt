@@ -3,3 +3,4 @@ ansible-lint
 ansible-core==2.15.*
 proxmoxer==2.*
 requests==2.*
+hvac>=1.0.0

@@ -1,38 +1,38 @@
 variable "proxmox_url" {
   type        = string
   description = "Proxmox API URL, e.g. https://proxmox.example.com:8006/api2/json"
-  default     = env("PROXMOX_URL")
+  default     = null
 }
 
 variable "proxmox_user" {
   type        = string
   description = "Proxmox API user, e.g. root@pam"
-  default     = env("PROXMOX_USERNAME")
+  default     = null
 }
 
 variable "proxmox_password" {
   type        = string
   description = "Proxmox API password"
-  default     = env("PROXMOX_PASSWORD")
+  default     = null
   sensitive   = true
 }
 
 variable "proxmox_node" {
   type        = string
   description = "Proxmox node name"
-  default     = env("PROXMOX_NODE")
+  default     = null
 }
 
 variable "storage_pool" {
   type        = string
   description = "Proxmox storage pool name"
-  default     = env("PROXMOX_STORAGE")
+  default     = null
 }
 
 variable "iso_storage_pool" {
   type        = string
   description = "Proxmox ISO storage pool name"
-  default     = env("PROXMOX_ISO_STORAGE")
+  default     = null
 }
 
 variable "bridge" {
@@ -68,33 +68,39 @@ variable "iso_file" {
 variable "build_username" {
   type        = string
   description = "Build user for WinRM connectivity"
-  default     = env("BUILD_USERNAME")
+  default     = null
 }
 
 variable "build_password" {
   type        = string
   description = "Build user password used during install"
   sensitive   = true
-  default     = env("BUILD_PASSWORD")
+  default     = null
 }
 
 variable "root_password" {
   type        = string
   description = "Unused for Windows builds (present in shared vars file)"
   sensitive   = true
-  default     = env("ROOT_PASSWORD")
+  default     = null
 }
 
 variable "ssh_public_key_root" {
   type        = string
   description = "Unused for Windows builds (present in shared vars file)"
-  default     = env("SSH_PUBLIC_KEY_ROOT")
+  default     = null
 }
 
 variable "ssh_public_key_build" {
   type        = string
   description = "Unused for Windows builds (present in shared vars file)"
-  default     = env("SSH_PUBLIC_KEY_BUILD")
+  default     = null
+}
+
+variable "ssh_private_key_file" {
+  type        = string
+  description = "Unused for Windows builds (passed by build.py for Linux templates)"
+  default     = null
 }
 
 variable "ks_language" {

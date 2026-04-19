@@ -3,10 +3,19 @@
   hosts: all
   become: true
   gather_facts: false
-  vars_files:
-    - "{{ playbook_dir }}/../../../../../secrets.yml"
   vars:
-    ansible_python_interpreter: /usr/bin/python3.8
+    ansible_python_interpreter: /usr/bin/python3.9
+    _packer_secret: "{{ lookup('community.hashi_vault.hashi_vault', 'secret/data/packer auth_method=token validate_certs=False') }}"
+    _packer_creds: "{{ _packer_secret }}"
+    redhat_username: "{{ _packer_creds['redhat_username'] }}"
+    redhat_password: "{{ _packer_creds['redhat_password'] }}"
+    satellite_host: "{{ _packer_creds['satellite_host'] | default('') }}"
+    satellite_environment: "{{ _packer_creds['satellite_environment'] | default('') }}"
+    satellite_certificate_url: "{{ _packer_creds['satellite_certificate_url'] | default('') }}"
+    satellite_username: "{{ _packer_creds['satellite_username'] | default('') }}"
+    satellite_password: "{{ _packer_creds['satellite_password'] | default('') }}"
+    satellite_configured: "{{ satellite_host | length > 0 }}"
+
   tasks:
     - name: Download Satellite Certificate RPM
       ansible.builtin.get_url:
@@ -14,12 +23,12 @@
         dest: /tmp/katello-ca-consumer-latest.noarch.rpm
         mode: "0644"
         validate_certs: false
+      when: satellite_configured | bool
 
     - name: Install Satellite Certificate RPM
-      ansible.builtin.dnf:
-        name: /tmp/katello-ca-consumer-latest.noarch.rpm
-        state: present
-        disable_gpg_check: true
+      ansible.builtin.raw: dnf -y install --nogpgcheck /tmp/katello-ca-consumer-latest.noarch.rpm
+      changed_when: true
+      when: satellite_configured | bool
 
     - name: Register against Red Hat Satellite Server
       community.general.redhat_subscription:
@@ -29,17 +38,24 @@
         auto_attach: true
         environment: "{{ satellite_environment }}"
         force_register: true
-      register: satellite_registration
       no_log: true
+      when: satellite_configured | bool
+
+    - name: Register against Red Hat Network
+      community.general.redhat_subscription:
+        username: "{{ redhat_username }}"
+        password: "{{ redhat_password }}"
+        force_register: true
+      no_log: true
+      when: not satellite_configured | bool
 
     - name: Update DNF metadata
-      ansible.builtin.dnf:
-        update_cache: true
+      ansible.builtin.raw: dnf makecache
+      changed_when: true
 
-    - name: Install Cloud-Init package
-      ansible.builtin.dnf:
-        name: cloud-init
-        state: present
+    - name: Verify Cloud-Init package is installed
+      ansible.builtin.command: rpm -q cloud-init  # noqa: command-instead-of-module
+      changed_when: false
 
     - name: Enable Cloud-Init service
       ansible.builtin.systemd:
@@ -48,12 +64,11 @@
 
     - name: Install custom CA certificates
       ansible.builtin.copy:
-        src: "{{ item }}"
-        dest: "/etc/pki/ca-trust/source/anchors/{{ item | basename }}"
+        content: "{{ lookup('community.hashi_vault.hashi_vault', 'secret/data/ca auth_method=token validate_certs=False')['bundle'] }}"
+        dest: /etc/pki/ca-trust/source/anchors/homelab-ca-bundle.pem
         owner: root
         group: root
         mode: "0644"
-      loop: "{{ lookup('fileglob', playbook_dir ~ '/../../../../../ca/*', wantlist=True) }}"
 
     - name: Update CA trust store
       ansible.builtin.command: update-ca-trust
@@ -63,10 +78,17 @@
       community.general.redhat_subscription:
         state: absent
       no_log: true
+      when: satellite_configured | bool
+
+    - name: Unregister from Red Hat Network
+      community.general.redhat_subscription:
+        state: absent
+      no_log: true
+      when: not satellite_configured | bool
 
     - name: Remove unused packages
-      ansible.builtin.dnf:
-        autoremove: true
+      ansible.builtin.raw: dnf -y autoremove
+      changed_when: true
 
     - name: Clean package manager caches
       ansible.builtin.command: dnf clean all

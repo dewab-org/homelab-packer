@@ -34,8 +34,10 @@ rootpw --iscrypted ${root_password_hash}
 user --name=${build_username} --password=${build_password_hash} --iscrypted --gecos="Packer User" --groups=wheel
 
 # Authorize SSH key for root.
-sshkey --username=root "${ssh_public_key_root}"
+sshkey --username=root "${ssh_public_key_root_authorized}"
+sshkey --username=root "${ssh_public_key_build}"
 sshkey --username=${build_username} "${ssh_public_key_build}"
+sshkey --username=${build_username} "${ssh_public_key_root_authorized}"
 
 # Sets the state of SELinux on the installed system.
 # Defaults to enforcing.

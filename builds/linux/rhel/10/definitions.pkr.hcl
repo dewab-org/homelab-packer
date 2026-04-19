@@ -1,38 +1,38 @@
 variable "proxmox_url" {
   type        = string
   description = "Proxmox API URL, e.g. https://proxmox.example.com:8006/api2/json"
-  default     = env("PROXMOX_URL")
+  default     = null
 }
 
 variable "proxmox_user" {
   type        = string
   description = "Proxmox API user, e.g. root@pam"
-  default     = env("PROXMOX_USERNAME")
+  default     = null
 }
 
 variable "proxmox_password" {
   type        = string
   description = "Proxmox API password"
-  default     = env("PROXMOX_PASSWORD")
   sensitive   = true
+  default     = null
 }
 
 variable "proxmox_node" {
   type        = string
   description = "Proxmox node name"
-  default     = env("PROXMOX_NODE")
+  default     = null
 }
 
 variable "storage_pool" {
   type        = string
   description = "Proxmox storage pool name"
-  default     = env("PROXMOX_STORAGE")
+  default     = null
 }
 
 variable "iso_storage_pool" {
   type        = string
   description = "Proxmox ISO storage pool name"
-  default     = env("PROXMOX_ISO_STORAGE")
+  default     = null
 }
 
 variable "bridge" {
@@ -55,19 +55,19 @@ variable "iso_file" {
 variable "build_username" {
   type        = string
   description = "Build user for SSH connectivity"
-  default     = env("BUILD_USERNAME")
+  default     = null
 }
 
 variable "build_password" {
   type        = string
   description = "Build user password used during install"
   sensitive   = true
-  default     = env("BUILD_PASSWORD")
+  default     = null
 }
 
 variable "ssh_private_key_file" {
   type        = string
-  description = "Path to the private key matching the root sshkey in kickstart"
+  description = "Path to the private key used by the build account during provisioning"
   default     = "~/.ssh/id_ed25519"
 }
 
@@ -75,9 +75,8 @@ variable "root_password" {
   type        = string
   description = "Root password used during install"
   sensitive   = true
-  default     = env("ROOT_PASSWORD")
+  default     = null
 }
-
 
 variable "ks_language" {
   type        = string
@@ -97,14 +96,14 @@ variable "ks_timezone" {
   default     = env("KICKSTART_TIMEZONE")
 }
 
-variable "ssh_public_key_root" {
+variable "ssh_public_key_root_authorized" {
   type        = string
-  description = "Root SSH public key"
-  default     = env("SSH_PUBLIC_KEY_ROOT")
+  description = "Persistent SSH public key to add to root authorized_keys"
+  default     = null
 }
 
 variable "ssh_public_key_build" {
   type        = string
-  description = "Build user SSH public key"
-  default     = env("SSH_PUBLIC_KEY_BUILD")
+  description = "Optional override for the build user's SSH public key; defaults to ssh_private_key_file.pub"
+  default     = null
 }

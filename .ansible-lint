@@ -2,5 +2,10 @@ profile: basic
 exclude_paths:
   - .git/
   - .venv/
+  - .github/
+  - .ansible-lint
+  - .markdownlint.yaml
+  - .pre-commit-config.yaml
+  - .yamllint
 warn_list:
   - experimental

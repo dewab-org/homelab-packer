@@ -4,12 +4,11 @@
   become: true
   gather_facts: false
   vars:
-    ansible_python_interpreter: /usr/bin/python3.8
+    ansible_python_interpreter: /usr/bin/python3.9
   tasks:
-    - name: Install Cloud-Init package
-      ansible.builtin.dnf:
-        name: cloud-init
-        state: present
+    - name: Verify Cloud-Init package is installed
+      ansible.builtin.command: rpm -q cloud-init  # noqa: command-instead-of-module
+      changed_when: false
 
     - name: Enable Cloud-Init service
       ansible.builtin.systemd:
@@ -18,12 +17,11 @@
 
     - name: Install custom CA certificates
       ansible.builtin.copy:
-        src: "{{ item }}"
-        dest: "/etc/pki/ca-trust/source/anchors/{{ item | basename }}"
+        content: "{{ lookup('community.hashi_vault.hashi_vault', 'secret/data/ca auth_method=token validate_certs=False')['bundle'] }}"
+        dest: /etc/pki/ca-trust/source/anchors/homelab-ca-bundle.pem
         owner: root
         group: root
         mode: "0644"
-      loop: "{{ lookup('fileglob', playbook_dir ~ '/../../../../../ca/*', wantlist=True) }}"
 
     - name: Update CA trust store
       ansible.builtin.command: update-ca-trust

@@ -33,9 +33,11 @@ rootpw --iscrypted ${root_password_hash}
 # Create build user
 user --name=${build_username} --password=${build_password_hash} --iscrypted --gecos="Packer User" --groups=wheel
 
-# Authorize SSH key for root.
-sshkey --username=root "${ssh_public_key_root}"
+# Authorize SSH keys: both personal and build keys for root and build user.
+sshkey --username=root "${ssh_public_key_root_authorized}"
+sshkey --username=root "${ssh_public_key_build}"
 sshkey --username=${build_username} "${ssh_public_key_build}"
+sshkey --username=${build_username} "${ssh_public_key_root_authorized}"
 
 # Sets the state of SELinux on the installed system.
 # Defaults to enforcing.
@@ -76,8 +78,9 @@ logvol swap --vgname=rhel --name=swap --thin --poolname=thinpool --size=4096 --f
 %packages --excludedocs
 @^minimal-environment
 qemu-guest-agent
+cloud-init
 python3
-python38
+python39
 zsh
 git
 nfs-utils
@@ -94,15 +97,7 @@ sssd
 
 # Post-installation commands.
 %post --log=/root/ks-post.log
-# Ensure password auth is enabled for installer SSH access.
-cat > /etc/ssh/sshd_config.d/90-packer.conf <<'SSHCONF'
-PermitRootLogin yes
-PasswordAuthentication yes
-Subsystem sftp /usr/libexec/openssh/sftp-server
-SSHCONF
-
 systemctl enable qemu-guest-agent
-systemctl restart sshd
 
 echo "${build_username} ALL=(ALL) NOPASSWD: ALL" >> /etc/sudoers.d/${build_username}
 sed -i "s/^.*requiretty/#Defaults requiretty/" /etc/sudoers
