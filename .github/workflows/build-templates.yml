@@ -24,9 +24,7 @@ concurrency:
 jobs:
   build:
     name: Build all templates
-    runs-on:
-      - self-hosted
-      - arc
+    runs-on: arc-runners
     timeout-minutes: 720
     env:
       VAULT_ADDR: ${{ vars.VAULT_ADDR }}
