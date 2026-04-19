@@ -14,22 +14,57 @@
     satellite_username: "{{ _packer_creds['satellite_username'] | default('') }}"
     satellite_password: "{{ _packer_creds['satellite_password'] | default('') }}"
     satellite_configured: "{{ (satellite_host | length) > 0 }}"
+    satellite_certificate_configured: "{{ (satellite_certificate_url | length) > 0 }}"
+    registration_nameservers:
+      - 192.168.1.10
+      - 192.168.1.11
 
   tasks:
+    - name: Show registration configuration
+      ansible.builtin.debug:
+        msg:
+          - "satellite_configured={{ satellite_configured }}"
+          - "satellite_certificate_configured={{ satellite_certificate_configured }}"
+          - "satellite_host={{ satellite_host }}"
+          - "satellite_environment={{ satellite_environment | default('') }}"
+          - "satellite_username_set={{ (satellite_username | length) > 0 }}"
+          - "satellite_password_set={{ (satellite_password | length) > 0 }}"
+          - "redhat_username_set={{ (redhat_username | length) > 0 }}"
+          - "redhat_password_set={{ (redhat_password | length) > 0 }}"
+
+    - name: Validate registration inputs
+      ansible.builtin.assert:
+        that:
+          - satellite_configured or ((redhat_username | length) > 0 and (redhat_password | length) > 0)
+          - not satellite_configured or ((satellite_username | length) > 0 and (satellite_password | length) > 0)
+        fail_msg: Missing required Red Hat registration inputs from Vault.
+
+    - name: Ensure DNS resolvers for registration
+      ansible.builtin.copy:
+        dest: /etc/resolv.conf
+        owner: root
+        group: root
+        mode: "0644"
+        content: |
+          search lab.local viking.org
+          {% for nameserver in registration_nameservers %}
+          nameserver {{ nameserver }}
+          {% endfor %}
+
     - name: Download Satellite Certificate RPM
       ansible.builtin.get_url:
         url: "{{ satellite_certificate_url }}"
         dest: /tmp/katello-ca-consumer-latest.noarch.rpm
         mode: "0644"
         validate_certs: false
-      when: satellite_configured
+      when: satellite_certificate_configured
 
     - name: Install Satellite Certificate RPM
       ansible.builtin.dnf:
         name: /tmp/katello-ca-consumer-latest.noarch.rpm
         state: present
         disable_gpg_check: true
-      when: satellite_configured
+      when: satellite_certificate_configured
 
     - name: Register against Red Hat Satellite Server
       community.general.redhat_subscription:

@@ -25,7 +25,7 @@ timezone ${ks_timezone}
 # --device    device to be activated and / or configured with the network command
 # --bootproto method to obtain networking configuration for device (default dhcp)
 # --noipv6    disable IPv6 on this device
-network --bootproto=dhcp --activate --onboot=true
+network --bootproto=dhcp --activate --onboot=true --nameserver=192.168.1.10,192.168.1.11
 
 # Configure root authentication.
 rootpw --iscrypted ${root_password_hash}
