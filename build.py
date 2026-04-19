@@ -14,6 +14,7 @@ import argparse
 import json
 import re
 import signal
+import shutil
 import subprocess
 import tempfile
 from typing import TYPE_CHECKING
@@ -111,7 +112,7 @@ def vault_secret_data(path: str = "secret/packer") -> dict[str, str]:
     return json.loads(output)["data"]["data"]
 
 
-def write_build_ssh_key() -> str:
+def write_build_ssh_key() -> tuple[str, Path]:
     secret_data = vault_secret_data()
     private_key = secret_data["SSH_PRIVATE_KEY_BUILD"]
     public_key = secret_data["SSH_PUBLIC_KEY_BUILD"]
@@ -121,7 +122,7 @@ def write_build_ssh_key() -> str:
     key_path.write_text(private_key)
     os.chmod(key_path, 0o600)
     key_path.with_suffix(".pub").write_text(f"{public_key}\n")
-    return str(key_path)
+    return str(key_path), tmpdir
 
 
 
@@ -180,10 +181,11 @@ def run_packer(build_dir: Path, common_vars: Path, args: argparse.Namespace) -> 
     packer_args.append(f"-var-file={common_vars}")
     if build_vars.exists():
         packer_args.append(f"-var-file={build_vars}")
-    packer_args.append(f"-var=ssh_private_key_file={write_build_ssh_key()}")
+    ssh_private_key_file, ssh_key_tmpdir = write_build_ssh_key()
+    packer_args.append(f"-var=ssh_private_key_file={ssh_private_key_file}")
     packer_args.append(str(build_dir))
-    proc = subprocess.Popen(packer_args)
     try:
+        proc = subprocess.Popen(packer_args)
         return proc.wait()
     except KeyboardInterrupt:
         proc.send_signal(signal.SIGINT)
@@ -192,6 +194,8 @@ def run_packer(build_dir: Path, common_vars: Path, args: argparse.Namespace) -> 
         except subprocess.TimeoutExpired:
             proc.kill()
             return proc.wait()
+    finally:
+        shutil.rmtree(ssh_key_tmpdir, ignore_errors=True)
 
 
 def run_build(build_dir: Path, common_vars: Path, args: argparse.Namespace) -> int:

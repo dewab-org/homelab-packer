@@ -19,7 +19,7 @@ permissions:
 
 concurrency:
   group: packer-target-environment
-  cancel-in-progress: false
+  cancel-in-progress: true
 
 jobs:
   build:
@@ -130,4 +130,16 @@ jobs:
               ;;
           esac
 
-          ./build.py "${args[@]}" all
+          build_pid=""
+          cleanup() {
+            if [ -n "${build_pid}" ] && kill -0 "${build_pid}" 2>/dev/null; then
+              kill -INT "${build_pid}" 2>/dev/null || true
+              wait "${build_pid}" || true
+            fi
+          }
+
+          trap 'cleanup; exit 130' INT TERM
+
+          ./build.py "${args[@]}" all &
+          build_pid=$!
+          wait "${build_pid}"
