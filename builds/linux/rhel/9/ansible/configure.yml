@@ -13,7 +13,7 @@
     satellite_certificate_url: "{{ _packer_creds['satellite_certificate_url'] | default('') }}"
     satellite_username: "{{ _packer_creds['satellite_username'] | default('') }}"
     satellite_password: "{{ _packer_creds['satellite_password'] | default('') }}"
-    satellite_configured: "{{ satellite_host | length > 0 }}"
+    satellite_configured: "{{ (satellite_host | length) > 0 }}"
 
   tasks:
     - name: Download Satellite Certificate RPM
@@ -22,14 +22,14 @@
         dest: /tmp/katello-ca-consumer-latest.noarch.rpm
         mode: "0644"
         validate_certs: false
-      when: satellite_configured | bool
+      when: satellite_configured
 
     - name: Install Satellite Certificate RPM
       ansible.builtin.dnf:
         name: /tmp/katello-ca-consumer-latest.noarch.rpm
         state: present
         disable_gpg_check: true
-      when: satellite_configured | bool
+      when: satellite_configured
 
     - name: Register against Red Hat Satellite Server
       community.general.redhat_subscription:
@@ -40,7 +40,7 @@
         environment: "{{ satellite_environment }}"
         force_register: true
       no_log: true
-      when: satellite_configured | bool
+      when: satellite_configured
 
     - name: Register against Red Hat Network
       community.general.redhat_subscription:
@@ -48,7 +48,7 @@
         password: "{{ redhat_password }}"
         force_register: true
       no_log: true
-      when: not satellite_configured | bool
+      when: not satellite_configured
 
     - name: Update DNF metadata
       ansible.builtin.dnf:
@@ -80,13 +80,13 @@
       community.general.redhat_subscription:
         state: absent
       no_log: true
-      when: satellite_configured | bool
+      when: satellite_configured
 
     - name: Unregister from Red Hat Network
       community.general.redhat_subscription:
         state: absent
       no_log: true
-      when: not satellite_configured | bool
+      when: not satellite_configured
 
     - name: Remove unused packages
       ansible.builtin.dnf:
