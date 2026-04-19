@@ -1,0 +1,15 @@
+---
+_packer_secret: "{{ lookup('community.hashi_vault.hashi_vault', 'secret/data/packer auth_method=token validate_certs=False') }}"
+_packer_creds: "{{ _packer_secret }}"
+redhat_username: "{{ _packer_creds['redhat_username'] }}"
+redhat_password: "{{ _packer_creds['redhat_password'] }}"
+satellite_host: "{{ _packer_creds['satellite_host'] | default('') }}"
+satellite_environment: "{{ _packer_creds['satellite_environment'] | default('') }}"
+satellite_certificate_url: "{{ _packer_creds['satellite_certificate_url'] | default('') }}"
+satellite_username: "{{ _packer_creds['satellite_username'] | default('') }}"
+satellite_password: "{{ _packer_creds['satellite_password'] | default('') }}"
+satellite_configured: "{{ (satellite_host | length) > 0 }}"
+satellite_certificate_configured: "{{ (satellite_certificate_url | length) > 0 }}"
+registration_nameservers:
+  - 192.168.1.10
+  - 192.168.1.11
