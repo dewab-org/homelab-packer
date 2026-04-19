@@ -51,6 +51,10 @@ jobs:
           set -euo pipefail
           sudo apt-get update
           sudo apt-get install -y --no-install-recommends sshpass
+          vault_version="1.19.5"
+          curl -fsSLo /tmp/vault.zip "https://releases.hashicorp.com/vault/${vault_version}/vault_${vault_version}_linux_amd64.zip"
+          sudo unzip -o /tmp/vault.zip vault -d /usr/local/bin
+          sudo chmod 0755 /usr/local/bin/vault
 
       - name: Write Vault CA certificate
         shell: bash
