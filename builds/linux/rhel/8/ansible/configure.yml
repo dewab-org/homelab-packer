@@ -7,7 +7,6 @@
     - ../../../ansible/vars/rhel_registration.yml
   vars:
     ansible_python_interpreter: /usr/bin/python3.9
-    cloud_init_package_mode: verify
     satellite_auto_attach: true
 
   tasks:

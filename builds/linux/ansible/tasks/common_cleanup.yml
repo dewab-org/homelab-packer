@@ -2,13 +2,6 @@
 - name: Verify Cloud-Init package is installed
   ansible.builtin.command: rpm -q cloud-init  # noqa: command-instead-of-module
   changed_when: false
-  when: (cloud_init_package_mode | default('present')) == 'verify'
-
-- name: Install Cloud-Init package
-  ansible.builtin.dnf:
-    name: cloud-init
-    state: present
-  when: (cloud_init_package_mode | default('present')) == 'present'
 
 - name: Enable Cloud-Init service
   ansible.builtin.systemd:

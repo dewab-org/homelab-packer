@@ -5,7 +5,6 @@
   gather_facts: false
   vars:
     ansible_python_interpreter: /usr/bin/python3.9
-    cloud_init_package_mode: verify
   tasks:
     - name: Run common cleanup tasks
       ansible.builtin.import_tasks: ../../../ansible/tasks/common_cleanup.yml

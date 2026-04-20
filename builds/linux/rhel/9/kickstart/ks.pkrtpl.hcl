@@ -78,6 +78,7 @@ logvol swap --vgname=rhel --name=swap --thin --poolname=thinpool --size=4096 --f
 %packages --excludedocs
 @^minimal-environment
 qemu-guest-agent
+cloud-init
 python3
 zsh
 git

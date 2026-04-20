@@ -11,7 +11,6 @@ if __name__ == "__main__":
         os.execv(str(_venv_python), [str(_venv_python)] + sys.argv)
 
 import argparse
-import json
 import re
 import signal
 import shutil
@@ -30,7 +29,7 @@ BUILD_BLOCK_RE = re.compile(r"^\s*build\s*{", re.MULTILINE)
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(
         description="Build Proxmox templates with Packer",
-        usage="%(prog)s [--ask] [--overwrite] [--skip] [all|<build-dir>]",
+        usage="%(prog)s [--ask] [--overwrite] [--skip] [--init-only|--validate-only] [all|<build-dir>]",
     )
     parser.add_argument("--ask", action="store_true", help="ask on Packer errors")
     exclusive = parser.add_mutually_exclusive_group()
@@ -41,6 +40,17 @@ def parse_args() -> argparse.Namespace:
         "--skip",
         action="store_true",
         help="skip builds if template or VMID already exists in Proxmox",
+    )
+    mode = parser.add_mutually_exclusive_group()
+    mode.add_argument(
+        "--init-only",
+        action="store_true",
+        help="run packer init only for the selected build target(s)",
+    )
+    mode.add_argument(
+        "--validate-only",
+        action="store_true",
+        help="run packer init and packer validate for the selected build target(s)",
     )
     parser.add_argument("target", nargs="?", help="build directory or 'all'")
     return parser.parse_args()
@@ -90,6 +100,18 @@ def list_build_dirs() -> list[str]:
     return build_dirs
 
 
+def resolve_targets(target: str | None) -> list[str]:
+    if not target:
+        return []
+
+    build_dirs = list_build_dirs()
+    if target == "all":
+        return build_dirs
+    if target in build_dirs:
+        return [target]
+    return []
+
+
 def parse_template_name(build_file: Path) -> str:
     if not build_file.exists():
         return ""
@@ -104,27 +126,25 @@ def parse_vm_id(build_vars: Path) -> str:
     return match.group(1) if match else ""
 
 
-def vault_secret_data(path: str = "secret/packer") -> dict[str, str]:
-    output = subprocess.check_output(
-        ["vault", "kv", "get", "-format=json", path],
-        text=True,
-    )
-    return json.loads(output)["data"]["data"]
-
-
-def write_build_ssh_key() -> tuple[str, Path]:
-    secret_data = vault_secret_data()
-    private_key = secret_data["SSH_PRIVATE_KEY_BUILD"]
-    public_key = secret_data["SSH_PUBLIC_KEY_BUILD"]
-
+def generate_build_ssh_keypair() -> tuple[str, str, Path]:
     tmpdir = Path(tempfile.mkdtemp(prefix="packer-ssh-key-"))
     key_path = tmpdir / "id_ed25519"
-    key_path.write_text(private_key)
-    os.chmod(key_path, 0o600)
-    key_path.with_suffix(".pub").write_text(f"{public_key}\n")
-    return str(key_path), tmpdir
-
-
+    subprocess.check_call(
+        [
+            "ssh-keygen",
+            "-q",
+            "-t",
+            "ed25519",
+            "-N",
+            "",
+            "-f",
+            str(key_path),
+            "-C",
+            "packer-build",
+        ]
+    )
+    public_key = key_path.with_suffix(".pub").read_text().strip()
+    return str(key_path), public_key, tmpdir
 
 
 def proxmox_client() -> "ProxmoxAPI | None":
@@ -171,21 +191,28 @@ def template_exists(build_dir: Path, build_vars: Path) -> bool | None:
     return False
 
 
-def run_packer(build_dir: Path, common_vars: Path, args: argparse.Namespace) -> int:
-    build_vars = build_dir / "variables.auto.pkrvars.hcl"
-    packer_args = ["packer", "build"]
-    if args.ask:
-        packer_args.append("-on-error=ask")
-    if args.overwrite:
-        packer_args.append("-force")
+def build_packer_args(
+    build_dir: Path,
+    common_vars: Path,
+    build_vars: Path,
+    ssh_private_key_file: str | None = None,
+    ssh_public_key_build: str | None = None,
+) -> list[str]:
+    packer_args = []
     packer_args.append(f"-var-file={common_vars}")
     if build_vars.exists():
         packer_args.append(f"-var-file={build_vars}")
-    ssh_private_key_file, ssh_key_tmpdir = write_build_ssh_key()
-    packer_args.append(f"-var=ssh_private_key_file={ssh_private_key_file}")
+    if ssh_private_key_file:
+        packer_args.append(f"-var=ssh_private_key_file={ssh_private_key_file}")
+    if ssh_public_key_build:
+        packer_args.append(f"-var=ssh_public_key_build={ssh_public_key_build}")
     packer_args.append(str(build_dir))
+    return packer_args
+
+
+def run_command(command: list[str]) -> int:
+    proc = subprocess.Popen(command)
     try:
-        proc = subprocess.Popen(packer_args)
         return proc.wait()
     except KeyboardInterrupt:
         proc.send_signal(signal.SIGINT)
@@ -194,6 +221,33 @@ def run_packer(build_dir: Path, common_vars: Path, args: argparse.Namespace) -> 
         except subprocess.TimeoutExpired:
             proc.kill()
             return proc.wait()
+
+
+def run_packer_init(build_dir: Path) -> int:
+    return run_command(["packer", "init", str(build_dir)])
+
+
+def run_packer_validate(build_dir: Path, common_vars: Path) -> int:
+    build_vars = build_dir / "variables.auto.pkrvars.hcl"
+    ssh_private_key_file, ssh_public_key_build, ssh_key_tmpdir = generate_build_ssh_keypair()
+    try:
+        packer_args = ["packer", "validate", *build_packer_args(build_dir, common_vars, build_vars, ssh_private_key_file, ssh_public_key_build)]
+        return run_command(packer_args)
+    finally:
+        shutil.rmtree(ssh_key_tmpdir, ignore_errors=True)
+
+
+def run_packer(build_dir: Path, common_vars: Path, args: argparse.Namespace) -> int:
+    build_vars = build_dir / "variables.auto.pkrvars.hcl"
+    ssh_private_key_file, ssh_public_key_build, ssh_key_tmpdir = generate_build_ssh_keypair()
+    try:
+        packer_args = ["packer", "build"]
+        if args.ask:
+            packer_args.append("-on-error=ask")
+        if args.overwrite:
+            packer_args.append("-force")
+        packer_args.extend(build_packer_args(build_dir, common_vars, build_vars, ssh_private_key_file, ssh_public_key_build))
+        return run_command(packer_args)
     finally:
         shutil.rmtree(ssh_key_tmpdir, ignore_errors=True)
 
@@ -229,17 +283,30 @@ def main() -> int:
     common_vars = root / "variables.auto.pkrvars.hcl"
 
     if not args.target:
-        print("Usage: build.py [--ask] [--overwrite] [--skip] [all|<build-dir>]")
+        print("Usage: build.py [--ask] [--overwrite] [--skip] [--init-only|--validate-only] [all|<build-dir>]")
         return 1
 
-    if args.target == "all":
-        for build in list_build_dirs():
-            status = run_build(root / build, common_vars, args)
-            if status != 0:
-                return status
-        return 0
+    targets = resolve_targets(args.target)
+    if not targets:
+        print(f"Unknown build target: {args.target}", file=sys.stderr)
+        print("Available build targets:", file=sys.stderr)
+        for build_dir in list_build_dirs():
+            print(f"  - {build_dir}", file=sys.stderr)
+        return 1
 
-    return run_build(root / args.target, common_vars, args)
+    for build in targets:
+        build_dir = root / build
+        if args.init_only:
+            status = run_packer_init(build_dir)
+        elif args.validate_only:
+            status = run_packer_init(build_dir)
+            if status == 0:
+                status = run_packer_validate(build_dir, common_vars)
+        else:
+            status = run_build(build_dir, common_vars, args)
+        if status != 0:
+            return status
+    return 0
 
 
 if __name__ == "__main__":

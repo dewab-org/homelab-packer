@@ -13,6 +13,11 @@ on:
           - overwrite
           - skip
           - default
+      build_target:
+        description: Build target to pass to build.py
+        required: false
+        default: all
+        type: string
 
 permissions:
   contents: read
@@ -91,17 +96,7 @@ jobs:
         run: |
           set -euo pipefail
           . .venv/bin/activate
-          mapfile -t builds < <(python - <<'PY'
-          import build
-
-          for build_dir in build.list_build_dirs():
-              print(build_dir)
-          PY
-          )
-
-          for build_dir in "${builds[@]}"; do
-            packer init "$build_dir"
-          done
+          ./build.py --init-only "${{ github.event.inputs.build_target || 'all' }}"
 
       - name: Build templates
         shell: bash
@@ -112,6 +107,11 @@ jobs:
           build_mode="${{ github.event.inputs.build_mode }}"
           if [ -z "$build_mode" ]; then
             build_mode="overwrite"
+          fi
+
+          build_target="${{ github.event.inputs.build_target }}"
+          if [ -z "$build_target" ]; then
+            build_target="all"
           fi
 
           args=()
@@ -140,6 +140,6 @@ jobs:
 
           trap 'cleanup; exit 130' INT TERM
 
-          ./build.py "${args[@]}" all &
+          ./build.py "${args[@]}" "$build_target" &
           build_pid=$!
           wait "${build_pid}"

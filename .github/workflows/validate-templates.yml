@@ -1,0 +1,91 @@
+name: validate-templates
+
+on:
+  push:
+  workflow_dispatch:
+    inputs:
+      validate_target:
+        description: Build target to validate with build.py
+        required: false
+        default: all
+        type: string
+
+permissions:
+  contents: read
+
+concurrency:
+  group: packer-static-validation
+  cancel-in-progress: true
+
+jobs:
+  validate:
+    name: Static validation
+    runs-on: arc-runners
+    timeout-minutes: 120
+    env:
+      VAULT_ADDR: ${{ vars.VAULT_ADDR }}
+      VAULT_TOKEN: ${{ secrets.VAULT_TOKEN }}
+      VAULT_CACERT: /tmp/vault-ca.pem
+      GITLEAKS_LICENSE: ${{ secrets.GITLEAKS_LICENSE }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Set up Packer
+        uses: hashicorp/setup-packer@main
+        with:
+          version: "1.15.1"
+
+      - name: Install validation dependencies
+        shell: bash
+        run: |
+          set -euo pipefail
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends ca-certificates
+          python -m venv .venv
+          . .venv/bin/activate
+          python -m pip install --upgrade pip
+          python -m pip install pre-commit -r requirements.txt
+          ansible-galaxy collection install -r requirements.yml
+
+      - name: Write Vault CA certificate
+        shell: bash
+        run: |
+          set -euo pipefail
+          printf '%s' "${{ secrets.VAULT_CACERT }}" > /tmp/vault-ca.pem
+          sudo install -m 0644 /tmp/vault-ca.pem /usr/local/share/ca-certificates/vault-viking-org.crt
+          sudo update-ca-certificates
+
+      - name: Run pre-commit checks
+        shell: bash
+        run: |
+          set -euo pipefail
+          . .venv/bin/activate
+          pre-commit run --all-files
+
+      - name: Check Packer formatting
+        shell: bash
+        run: |
+          set -euo pipefail
+          packer fmt -check -recursive .
+
+      - name: Check Ansible syntax
+        shell: bash
+        run: |
+          set -euo pipefail
+          . .venv/bin/activate
+          while IFS= read -r playbook; do
+            ansible-playbook -i 'localhost,' -c local --syntax-check "$playbook"
+          done < <(find builds/linux -path '*/ansible/configure.yml' | sort)
+
+      - name: Validate templates
+        shell: bash
+        run: |
+          set -euo pipefail
+          . .venv/bin/activate
+          ./build.py --validate-only "${{ github.event.inputs.validate_target || 'all' }}"
