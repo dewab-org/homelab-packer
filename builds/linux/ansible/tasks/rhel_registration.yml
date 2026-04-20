@@ -72,12 +72,14 @@
   community.general.redhat_subscription:
     state: absent
   no_log: true
+  failed_when: false
   when: satellite_configured
 
 - name: Unregister from Red Hat Network
   community.general.redhat_subscription:
     state: absent
   no_log: true
+  failed_when: false
   when: not satellite_configured
 
 - name: Remove unused packages
