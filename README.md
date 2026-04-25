@@ -1,5 +1,9 @@
 # homelab.packer
 
+[![build-templates](https://github.com/dewab/homelab-packer/actions/workflows/build-templates.yml/badge.svg)](https://github.com/dewab/homelab-packer/actions/workflows/build-templates.yml)
+[![validate-templates](https://github.com/dewab/homelab-packer/actions/workflows/validate-templates.yml/badge.svg)](https://github.com/dewab/homelab-packer/actions/workflows/validate-templates.yml)
+[![gitleaks](https://github.com/dewab/homelab-packer/actions/workflows/gitleaks.yml/badge.svg)](https://github.com/dewab/homelab-packer/actions/workflows/gitleaks.yml)
+
 Packer templates for building Proxmox VM templates across Linux families, plus in-progress Windows templates.
 
 ## Layout
