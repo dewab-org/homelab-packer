@@ -7,14 +7,51 @@
     - name: Install packages
       ansible.builtin.apt:
         name:
+          - bat
           - curl
+          - dnsutils
+          - fd-find
+          - fzf
           - git
+          - iputils-ping
+          - jq
+          - lsof
+          - net-tools
+          - netcat-openbsd
           - nfs-common
           - qemu-guest-agent
+          - ripgrep
+          - rsync
+          - strace
+          - sysstat
+          - tcpdump
+          - tmux
+          - tree
+          - unzip
           - vim
+          - wget
+          - zip
           - zsh
         state: present
         update_cache: true
+
+    - name: Symlink fdfind to fd
+      ansible.builtin.file:
+        src: /usr/bin/fdfind
+        dest: /usr/local/bin/fd
+        state: link
+
+    - name: Symlink batcat to bat
+      ansible.builtin.file:
+        src: /usr/bin/batcat
+        dest: /usr/local/bin/bat
+        state: link
+
+    - name: Install yq
+      ansible.builtin.get_url:
+        url: https://github.com/mikefarah/yq/releases/latest/download/yq_linux_amd64
+        dest: /usr/local/bin/yq
+        mode: "0755"
 
     - name: Enable qemu-guest-agent service
       ansible.builtin.systemd:
@@ -94,6 +131,28 @@
         path: /etc/udev/rules.d/70-persistent-net.rules
         state: absent
 
-    - name: Remove build-time static netplan config
+    - name: Remove all build-time netplan configs
       ansible.builtin.shell: find /etc/netplan -name '*.yaml' -delete
       changed_when: true
+
+    - name: Write DHCP netplan for deployed VMs
+      ansible.builtin.copy:
+        dest: /etc/netplan/01-dhcp.yaml
+        owner: root
+        group: root
+        mode: "0600"
+        content: |
+          network:
+            version: 2
+            ethernets:
+              any:
+                match:
+                  name: "en*"
+                dhcp4: true
+                dhcp6: false
+
+    - name: Allow root login via cloud-init on deployed VMs
+      ansible.builtin.lineinfile:
+        path: /etc/cloud/cloud.cfg
+        regexp: '^disable_root:'
+        line: 'disable_root: false'

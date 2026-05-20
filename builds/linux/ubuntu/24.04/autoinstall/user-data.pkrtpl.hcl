@@ -22,16 +22,14 @@ autoinstall:
   network:
     version: 2
     ethernets:
-      id0:
+      any:
         match:
-          driver: virtio_net
-        dhcp4: false
-        addresses: [192.168.10.195/24]
-        routes:
-          - to: default
-            via: 192.168.10.1
-        nameservers:
-          addresses: [8.8.8.8, 1.1.1.1]
+          name: "en*"
+        dhcp4: true
+        dhcp6: false
+  packages:
+    - qemu-guest-agent
+
   storage:
     layout:
       name: lvm
@@ -60,3 +58,4 @@ autoinstall:
     - curtin in-target -- systemctl enable serial-getty@ttyS0.service
     - curtin in-target -- sed -i 's/^GRUB_CMDLINE_LINUX_DEFAULT="/GRUB_CMDLINE_LINUX_DEFAULT="console=ttyS0,115200n8 /' /etc/default/grub
     - curtin in-target -- update-grub
+    - curtin in-target -- systemctl enable qemu-guest-agent
