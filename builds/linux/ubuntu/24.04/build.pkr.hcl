@@ -98,6 +98,7 @@ source "proxmox-iso" "ubuntu_24_04" {
     "<f10>"
   ]
 
+  ssh_host             = "192.168.10.195"
   ssh_username         = local.build_username
   ssh_private_key_file = var.ssh_private_key_file
   ssh_timeout          = "20m"
