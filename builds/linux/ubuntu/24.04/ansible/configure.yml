@@ -19,6 +19,7 @@
           - net-tools
           - netcat-openbsd
           - nfs-common
+          - openssh-server
           - qemu-guest-agent
           - ripgrep
           - rsync
@@ -28,6 +29,7 @@
           - tmux
           - tree
           - unzip
+          - ufw
           - vim
           - wget
           - zip
@@ -57,6 +59,21 @@
       ansible.builtin.systemd:
         name: qemu-guest-agent
         enabled: true
+
+    - name: Enable SSH service
+      ansible.builtin.systemd:
+        name: ssh
+        enabled: true
+
+    - name: Allow SSH through firewall
+      community.general.ufw:
+        rule: allow
+        name: OpenSSH
+
+    - name: Enable firewall
+      community.general.ufw:
+        state: enabled
+        policy: deny
 
     - name: Install custom CA certificates
       ansible.builtin.copy:
