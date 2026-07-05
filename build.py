@@ -116,6 +116,13 @@ def parse_template_name(build_file: Path) -> str:
     if not build_file.exists():
         return ""
     match = re.search(r'template_name\s*=\s*"([^"]+)"', build_file.read_text())
+    if match:
+        return match.group(1)
+    match = re.search(
+        r'variable\s+"template_name"\s*{[^}]*default\s*=\s*"([^"]+)"',
+        build_file.read_text(),
+        re.DOTALL,
+    )
     return match.group(1) if match else ""
 
 

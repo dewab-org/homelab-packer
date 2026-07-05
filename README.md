@@ -11,6 +11,7 @@ Packer templates for building Proxmox VM templates across Linux families, plus i
 - `builds/linux/rhel/{8,9,10}`: RHEL builds with Satellite registration and Cloud-Init.
 - `builds/linux/rocky/{8,9,10}`: Rocky Linux builds with Cloud-Init.
 - `builds/linux/ubuntu/24.04`: Ubuntu 24.04 autoinstall build.
+- `builds/linux/ubuntu/24.04-cloud`: Ubuntu 24.04 cloud-image build.
 - `builds/windows/windows-10`: Windows 10 stub.
 - `builds/windows/windows-server-2022`: Windows Server 2022 stub.
 - `ca/`: Custom CA certificates applied by Linux configure playbooks.
@@ -46,7 +47,8 @@ Packer templates for building Proxmox VM templates across Linux families, plus i
 - VMID mapping:
   - RHEL 8/9/10: 9108/9109/9110
   - Rocky 8/9/10: 9208/9209/9210
-  - Ubuntu 24.04: 9301
+  - Ubuntu 24.04 ISO/autoinstall: 9301
+  - Ubuntu 24.04 cloud image: 9311
 - RHEL ISO storage pool: `iso_images` with the following filenames:
   - `rhel-8.10-x86_64-dvd.iso`
   - `rhel-9.7-x86_64-dvd.iso`
@@ -54,7 +56,9 @@ Packer templates for building Proxmox VM templates across Linux families, plus i
 - All Linux builds enable Cloud-Init and the QEMU guest agent.
 - All RHEL and Rocky kickstarts install `cloud-init` during the installer phase; Ansible only verifies and enables it.
 - `iso_file` (Proxmox storage reference) takes precedence when set; otherwise `iso_url` downloads and `iso_checksum` validates when provided.
-- Rocky and Ubuntu can download official ISOs into Packer cache (`**/packer_cache`, ignored by git) or use `iso_file`.
+- Rocky and Ubuntu ISO builds can download official ISOs into Packer cache (`**/packer_cache`, ignored by git) or use `iso_file`.
+- The Ubuntu cloud-image flow bootstraps a base template from Canonical's released Noble cloud image using Proxmox API import storage caching, then uses Packer `proxmox-clone` to template VMID 9311.
+- The cloud-image template disk is resized to 60G via a Proxmox API finalizer after cloning.
 - CI now has two paths:
   - `build-templates`: full Proxmox build workflow, with manual `build_target` selection
   - `validate-templates`: static validation workflow, with manual `validate_target` selection
