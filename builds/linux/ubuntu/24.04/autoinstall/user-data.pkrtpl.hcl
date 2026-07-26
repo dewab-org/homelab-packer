@@ -29,6 +29,7 @@ autoinstall:
         dhcp6: false
   packages:
     - qemu-guest-agent
+    - rsync
 
   storage:
     layout:

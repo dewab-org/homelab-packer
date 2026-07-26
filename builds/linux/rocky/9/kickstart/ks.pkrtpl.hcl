@@ -83,6 +83,7 @@ python3
 zsh
 git
 nfs-utils
+rsync
 openssh-server
 curl
 vim-minimal
