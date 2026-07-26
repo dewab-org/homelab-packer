@@ -2,6 +2,13 @@ name: build-templates
 
 on:
   push:
+  schedule:
+    # Weekly full template rebuild: Sundays 14:00 UTC (09:00 CDT). Clear of
+    # the nightly job band (02:00-12:00 UTC) and the Sunday HA-upgrade (10:00)
+    # / step-ca-restore-test (12:00) jobs. Scheduled runs use the input
+    # defaults (build_target=all, build_mode=overwrite). Note: scheduled
+    # workflows only fire on the default branch.
+    - cron: "0 14 * * 0"
   workflow_dispatch:
     inputs:
       build_mode:
