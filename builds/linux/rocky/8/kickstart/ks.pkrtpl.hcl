@@ -18,7 +18,7 @@ lang ${ks_language}
 keyboard ${ks_keyboard}
 
 # Sets the system time zone.
-timezone ${ks_timezone}
+timezone --utc ${ks_timezone}
 
 # Configure network information for target system and activate network devices in the installer environment (optional)
 # --onboot    enable device at a boot time
