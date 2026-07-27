@@ -16,6 +16,8 @@ if __name__ == "__main__":
 
 import argparse
 import time
+from datetime import datetime
+from zoneinfo import ZoneInfo
 import urllib.parse
 
 import requests
@@ -33,7 +35,7 @@ DEFAULT_IMPORT_FILENAME = "ubuntu-24.04-server-cloudimg-amd64.qcow2"
 
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(
-        description="Bootstrap the Ubuntu cloud-image base template in Proxmox using the API."
+        description="Bootstrap a cloud-image base template in Proxmox using the API."
     )
     parser.add_argument("--proxmox-url", default=os.environ.get("PROXMOX_URL"))
     parser.add_argument("--proxmox-user", default=os.environ.get("PROXMOX_USERNAME"))
@@ -247,7 +249,7 @@ def create_base_template(prox: ProxmoxAPI, args: argparse.Namespace, import_voli
         "ide2": f"{args.target_storage}:cloudinit",
         "boot": "order=scsi0",
         "ipconfig0": "ip=dhcp",
-        "description": "Ubuntu 24.04 cloud image base template for Packer proxmox-clone builds",
+        "description": f"{args.base_template_name} base template for Packer proxmox-clone builds, imported from {args.import_filename} on {datetime.now(ZoneInfo('America/Chicago')).strftime('%Y-%m-%d %H:%M:%S %Z')}",
     }
     upid = prox.nodes(args.node).qemu.post(**create_params)
     wait_task(prox, upid)

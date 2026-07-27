@@ -4,6 +4,18 @@
   become: true
   gather_facts: false
   tasks:
+    - name: Install lab CA certificates from web mirror
+      ansible.builtin.get_url:
+        url: "https://web.viking.org/tmp/certs/{{ item }}"
+        dest: "/usr/local/share/ca-certificates/{{ item }}"
+        owner: root
+        group: root
+        mode: "0644"
+        validate_certs: false
+      loop:
+        - root_ca.crt
+        - intermediate_ca.crt
+
     - name: Install packages
       ansible.builtin.apt:
         name:
@@ -173,3 +185,7 @@
         path: /etc/cloud/cloud.cfg
         regexp: '^disable_root:'
         line: 'disable_root: false'
+
+    - name: Ensure hardware clock is interpreted as UTC
+      ansible.builtin.command: timedatectl set-local-rtc 0
+      changed_when: true

@@ -123,4 +123,15 @@ build {
     user             = local.build_username
     ansible_env_vars = ["ANSIBLE_CONFIG=${path.root}/../../../../ansible.cfg", "OBJC_DISABLE_INITIALIZE_FORK_SAFETY=YES", "ANSIBLE_HASHI_VAULT_VALIDATE_CERTS=false"]
   }
+
+  post-processor "shell-local" {
+    environment_vars = [
+      "PROXMOX_URL=${local.proxmox_url}",
+      "PROXMOX_USERNAME=${local.proxmox_user}",
+      "PROXMOX_PASSWORD=${local.proxmox_password}",
+      "PROXMOX_NODE=${local.proxmox_node}",
+      "PROXMOX_VM_ID=${var.vm_id}",
+    ]
+    command = "${path.root}/../../common/scripts/set-template-description.py"
+  }
 }
