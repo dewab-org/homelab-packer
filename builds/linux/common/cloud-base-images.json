@@ -1,0 +1,33 @@
+{
+  "_comment": "Pinned upstream cloud images for the *-cloud base templates. Consumed by builds/linux/common/scripts/bootstrap-cloud-bases.py. RHEL images are mirrored on web.viking.org (nas.viking.org:/mnt/pool0/cdimages); Rocky images are pinned upstream releases.",
+  "rhel-8-cloud-base": {
+    "vmid": 9128,
+    "image_url": "https://web.viking.org/cdimages/Linux/RedHat/rhel-8.10-x86_64-kvm.qcow2",
+    "sha256": "820853871801754056642ead33834fbe5640421b57e07f2c084684f4d1a7d2fe"
+  },
+  "rhel-9-cloud-base": {
+    "vmid": 9129,
+    "image_url": "https://web.viking.org/cdimages/Linux/RedHat/rhel-9.8-x86_64-kvm.qcow2",
+    "sha256": "b99091f1b4489111004d449398d9cc6aa024cb48b02c72fa99e6ca1fc48a7e4e"
+  },
+  "rhel-10-cloud-base": {
+    "vmid": 9130,
+    "image_url": "https://web.viking.org/cdimages/Linux/RedHat/rhel-10.2-x86_64-kvm.qcow2",
+    "sha256": "caaacd0b11bbc4206f8c7fec8594b82b4366b3f88ff974dbbf373832ae676f4f"
+  },
+  "rocky-8-cloud-base": {
+    "vmid": 9228,
+    "image_url": "https://download.rockylinux.org/pub/rocky/8/images/x86_64/Rocky-8-GenericCloud-Base-8.10-20240528.0.x86_64.qcow2",
+    "sha256": "e56066c58606191e96184de9a9183a3af33c59bcbd8740d8b10ca054a7a89c14"
+  },
+  "rocky-9-cloud-base": {
+    "vmid": 9229,
+    "image_url": "https://download.rockylinux.org/pub/rocky/9/images/x86_64/Rocky-9-GenericCloud-Base-9.8-20260525.0.x86_64.qcow2",
+    "sha256": "92c206cc6f790c61583247eefe87890f8828420662c17cacf247cec78ab4eec8"
+  },
+  "rocky-10-cloud-base": {
+    "vmid": 9230,
+    "image_url": "https://download.rockylinux.org/pub/rocky/10/images/x86_64/Rocky-10-GenericCloud-Base-10.2-20260525.0.x86_64.qcow2",
+    "sha256": "9fc9e9ff16888bb68ac39b0392e25c9c92684d50c85f1cce6ab549363bbc4b48"
+  }
+}

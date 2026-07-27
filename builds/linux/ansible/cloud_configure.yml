@@ -1,0 +1,124 @@
+---
+# Shared configuration playbook for RHEL/Rocky cloud (qcow2) image templates.
+# The seed cloud-config has already: registered RHEL to RHN (rh_subscription),
+# installed qemu-guest-agent, created root/build users with the same
+# passwords and authorized keys as the kickstart builds. This playbook brings
+# the image to full parity with the kickstart-built templates (packages,
+# sshd drop-in, authselect, timezone, services, CA trust, identity cleanup)
+# and unregisters RHEL before templating.
+#
+# Inherent flavor difference (not reproducible from a cloud image): the
+# kickstart builds use a thin-LVM layout with separate /var, /home, and swap;
+# cloud images keep their single-partition root filesystem.
+- name: Cloud image template configuration
+  hosts: all
+  become: true
+  gather_facts: false
+  vars_files:
+    - vars/rhel_registration.yml
+  vars:
+    cloud_timezone: America/Chicago
+    cloud_build_username: null
+    cloud_base_packages:
+      - cloud-init
+      - curl
+      - firewalld
+      - git
+      - ipa-client
+      - nfs-utils
+      - python3
+      - rsync
+      - sssd
+      - vim-minimal
+      - zsh
+  tasks:
+    # EL8 cloud images ship platform-python 3.6, too old for ansible-core;
+    # the kickstart builds solve this with python39 in %packages.
+    - name: Detect EL8
+      ansible.builtin.raw: grep -q 'VERSION_ID="8' /etc/os-release && echo el8 || true
+      register: cloud_el8_probe
+      changed_when: false
+
+    - name: Bootstrap Python 3.9 on EL8
+      ansible.builtin.raw: command -v /usr/bin/python3.9 >/dev/null 2>&1 || dnf install -y python39
+      when: "'el8' in cloud_el8_probe.stdout"
+      register: cloud_el8_python
+      changed_when: "'Installed' in (cloud_el8_python.stdout | default(''))"
+
+    - name: Use Python 3.9 interpreter on EL8
+      ansible.builtin.set_fact:
+        ansible_python_interpreter: /usr/bin/python3.9
+      when: "'el8' in cloud_el8_probe.stdout"
+
+    - name: Gather facts
+      ansible.builtin.setup:
+
+    - name: Install base packages (parity with kickstart %packages)
+      ansible.builtin.dnf:
+        name: "{{ cloud_base_packages + (['python39'] if ansible_distribution_major_version == '8' else []) }}"
+        state: present
+        update_cache: true
+
+    - name: Allow root login and password auth (parity with kickstart %post)
+      ansible.builtin.copy:
+        dest: /etc/ssh/sshd_config.d/90-packer.conf
+        content: |
+          PermitRootLogin yes
+          PasswordAuthentication yes
+          Subsystem sftp /usr/libexec/openssh/sftp-server
+        owner: root
+        group: root
+        mode: "0600"
+
+    - name: Write build user sudoers entry (parity with kickstart %post)
+      ansible.builtin.copy:
+        dest: "/etc/sudoers.d/{{ cloud_build_username }}"
+        content: "{{ cloud_build_username }} ALL=(ALL) NOPASSWD: ALL\n"
+        owner: root
+        group: root
+        mode: "0440"
+        validate: visudo -cf %s
+      when: cloud_build_username
+
+    - name: Select sssd authselect profile (parity with kickstart authselect)
+      ansible.builtin.command: authselect select sssd --force
+      changed_when: true
+
+    - name: Set timezone (parity with kickstart timezone --utc)
+      community.general.timezone:
+        name: "{{ cloud_timezone }}"
+        hwclock: UTC
+
+    - name: Enable baseline services (parity with kickstart services --enabled)
+      ansible.builtin.systemd:
+        name: "{{ item }}"
+        enabled: true
+      loop:
+        - NetworkManager
+        - sshd
+        - chronyd
+        - qemu-guest-agent
+        - firewalld
+
+    - name: Disable kdump if present (parity with kickstart services --disabled)
+      ansible.builtin.systemd:
+        name: kdump
+        enabled: false
+      failed_when: false
+
+    - name: Template cleanup
+      ansible.builtin.import_tasks: tasks/common_cleanup.yml
+
+    - name: Unregister from Red Hat Subscription Management
+      community.general.redhat_subscription:
+        state: absent
+      when: ansible_distribution == 'RedHat'
+      failed_when: false
+
+    - name: Remove unused packages
+      ansible.builtin.dnf:
+        autoremove: true
+
+    - name: Remove dnf caches
+      ansible.builtin.command: dnf clean all
+      changed_when: true

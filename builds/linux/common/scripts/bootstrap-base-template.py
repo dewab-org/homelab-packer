@@ -6,7 +6,10 @@ import sys
 from pathlib import Path
 
 if __name__ == "__main__":
-    repo_root = Path(__file__).resolve().parents[5]
+    repo_root = next(
+        (p for p in Path(__file__).resolve().parents if (p / ".venv").is_dir()),
+        Path(__file__).resolve().parents[4],
+    )
     venv_python = repo_root / ".venv" / "bin" / "python3"
     if venv_python.is_file() and os.access(venv_python, os.X_OK) and sys.executable != str(venv_python):
         os.execv(str(venv_python), [str(venv_python)] + sys.argv)
@@ -55,6 +58,11 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--checksum-url",
         default=os.environ.get("CLOUD_IMAGE_CHECKSUM_URL", DEFAULT_CHECKSUM_URL),
+    )
+    parser.add_argument(
+        "--checksum",
+        default=os.environ.get("CLOUD_IMAGE_CHECKSUM"),
+        help="Literal sha256 of the image; skips --checksum-url when set.",
     )
     parser.add_argument(
         "--cache-dir",
@@ -256,7 +264,7 @@ def main() -> int:
     args.node = require(args.node, "PROXMOX_NODE")
     args.target_storage = require(args.target_storage, "PROXMOX_STORAGE")
 
-    checksum = read_checksum(args.checksum_url, args.image_url, args.cache_dir)
+    checksum = args.checksum or read_checksum(args.checksum_url, args.image_url, args.cache_dir)
     prox = proxmox_client(args.proxmox_url, args.proxmox_user, args.proxmox_password)
     args.import_storage = select_import_storage(prox, args.import_storage)
     import_volid = ensure_import_volume(prox, args, checksum)

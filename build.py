@@ -79,7 +79,7 @@ def list_build_dirs() -> list[str]:
     build_files = sorted(
         builds_root.glob("**/build.pkr.hcl"),
         key=lambda path: tuple(
-            int(part) if part.isdigit() else part
+            (0, int(part), "") if part.isdigit() else (1, 0, part)
             for part in path.parent.relative_to(repo_root()).parts
         ),
     )
@@ -106,7 +106,10 @@ def resolve_targets(target: str | None) -> list[str]:
 
     build_dirs = list_build_dirs()
     if target == "all":
-        return build_dirs
+        # "all" covers the Linux builds only: the Windows builds are
+        # in-progress stubs that cannot complete unattended in CI. Build them
+        # explicitly with ./build.py builds/windows/<name>.
+        return [d for d in build_dirs if d.startswith("builds/linux/")]
     if target in build_dirs:
         return [target]
     return []

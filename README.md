@@ -8,8 +8,10 @@ Packer templates for building Proxmox VM templates across Linux families, plus i
 
 ## Layout
 
-- `builds/linux/rhel/{8,9,10}`: RHEL builds with Satellite registration and Cloud-Init.
-- `builds/linux/rocky/{8,9,10}`: Rocky Linux builds with Cloud-Init.
+- `builds/linux/rhel/{8,9,10}`: RHEL ISO/kickstart builds with RHN registration and Cloud-Init.
+- `builds/linux/rhel/{8,9,10}-cloud`: RHEL cloud-image (qcow2) builds cloned from bootstrapped base templates.
+- `builds/linux/rocky/{8,9,10}`: Rocky Linux ISO/kickstart builds with Cloud-Init.
+- `builds/linux/rocky/{8,9,10}-cloud`: Rocky cloud-image (GenericCloud qcow2) builds.
 - `builds/linux/ubuntu/24.04`: Ubuntu 24.04 autoinstall build.
 - `builds/linux/ubuntu/24.04-cloud`: Ubuntu 24.04 cloud-image build.
 - `builds/windows/windows-10`: Windows 10 stub.
@@ -44,20 +46,22 @@ Packer templates for building Proxmox VM templates across Linux families, plus i
 - Use `./build.py --skip` to skip builds when a matching template (or VMID) already exists in Proxmox.
 - Use `./build.py --init-only` to run `packer init` only.
 - Use `./build.py --validate-only` to run `packer init` and `packer validate` without starting a Proxmox build.
-- VMID mapping:
-  - RHEL 8/9/10: 9108/9109/9110
-  - Rocky 8/9/10: 9208/9209/9210
-  - Ubuntu 24.04 ISO/autoinstall: 9301
-  - Ubuntu 24.04 cloud image: 9311
+- VMID mapping (cloud-base = ISO VMID +20, cloud template = ISO VMID +30):
+  - RHEL 8/9/10 ISO: 9108/9109/9110; cloud-base: 9128/9129/9130; cloud: 9138/9139/9140
+  - Rocky 8/9/10 ISO: 9208/9209/9210; cloud-base: 9228/9229/9230; cloud: 9238/9239/9240
+  - Ubuntu 24.04 ISO/autoinstall: 9301; cloud-base: 9310; cloud: 9311
 - RHEL ISO storage pool: `iso_images` with the following filenames:
   - `rhel-8.10-x86_64-dvd.iso`
-  - `rhel-9.7-x86_64-dvd.iso`
-  - `rhel-10.1-x86_64-dvd.iso`
+  - `rhel-9.8-x86_64-dvd.iso`
+  - `rhel-10.2-x86_64-dvd.iso`
+  (RHEL ISOs and qcow2 images are mirrored at <https://web.viking.org/cdimages/Linux/RedHat/>, backed by nas.viking.org:/mnt/pool0/cdimages)
 - All Linux builds enable Cloud-Init and the QEMU guest agent.
 - All RHEL and Rocky kickstarts install `cloud-init` during the installer phase; Ansible only verifies and enables it.
 - `iso_file` (Proxmox storage reference) takes precedence when set; otherwise `iso_url` downloads and `iso_checksum` validates when provided.
 - Rocky and Ubuntu ISO builds can download official ISOs into Packer cache (`**/packer_cache`, ignored by git) or use `iso_file`.
 - The Ubuntu cloud-image flow bootstraps a base template from Canonical's released Noble cloud image using Proxmox API import storage caching, then uses Packer `proxmox-clone` to template VMID 9311.
+- The cloud builds install the same packages and apply the same customizations as the kickstart builds (base package set, root/build users with identical passwords and authorized keys, sshd `90-packer.conf`, authselect sssd, timezone, enabled services, CA trust, identity cleanup). The one inherent difference: cloud images keep their single-partition root filesystem instead of the kickstart thin-LVM layout with separate `/var`, `/home`, and swap.
+- The RHEL/Rocky cloud-image flow works the same way: `builds/linux/common/scripts/bootstrap-cloud-bases.py` creates all six base templates from the pinned images in `builds/linux/common/cloud-base-images.json`; each `*-cloud` build directory symlinks the shared `builds/linux/common/cloud-clone-build.pkr.hcl`. RHEL cloud images register to RHN at cloud-init time (rh_subscription) so qemu-guest-agent can be installed, and are unregistered by the shared `builds/linux/ansible/cloud_configure.yml` before templating.
 - The cloud-image template disk is resized to 60G via a Proxmox API finalizer after cloning.
 - CI now has two paths:
   - `build-templates`: full Proxmox build workflow, with manual `build_target` selection
