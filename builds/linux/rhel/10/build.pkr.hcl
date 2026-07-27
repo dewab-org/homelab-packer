@@ -83,10 +83,10 @@ source "proxmox-iso" "rhel_10" {
     unmount  = true
   }
 
-  boot_wait = "6s"
+  boot_wait = "12s"
   boot      = "order=scsi0;ide2"
   boot_command = [
-    "<up>e<down><down><end> inst.text inst.ks=cdrom console=ttyS0,115200n8 <leftCtrlOn>x<leftCtrlOff>"
+    "<up><wait2>e<wait1><down><down><end> inst.text inst.ks=cdrom console=ttyS0,115200n8 <wait><leftCtrlOn>x<leftCtrlOff>"
   ]
 
   ssh_username = local.build_username
