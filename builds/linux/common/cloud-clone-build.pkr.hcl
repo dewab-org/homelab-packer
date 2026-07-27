@@ -44,33 +44,17 @@ locals {
     "  auto-attach: true",
   ]) : ""
 
-  seed_user_data = <<-EOF
-#cloud-config
-${local.rh_subscription_block}
-packages:
-  - qemu-guest-agent
-disable_root: false
-ssh_pwauth: true
-users:
-  - default
-  - name: root
-    lock_passwd: false
-    hashed_passwd: ${local.root_password_hash}
-    ssh_authorized_keys:
-      - ${local.ssh_public_key_root_authorized}
-      - ${var.ssh_public_key_build}
-  - name: ${local.build_username}
-    groups: wheel
-    shell: /bin/bash
-    sudo: ALL=(ALL) NOPASSWD:ALL
-    lock_passwd: false
-    hashed_passwd: ${local.build_password_hash}
-    ssh_authorized_keys:
-      - ${var.ssh_public_key_build}
-      - ${local.ssh_public_key_root_authorized}
-runcmd:
-  - systemctl enable --now qemu-guest-agent
-EOF
+  // Seed cloud-config lives in cloud-seed-user-data.pkrtpl (kickstart-style
+  // template file); parity with the ISO builds is applied by
+  // builds/linux/ansible/cloud_configure.yml.
+  seed_user_data = templatefile("${path.root}/../../common/cloud-seed-user-data.pkrtpl", {
+    rh_subscription_block          = local.rh_subscription_block
+    build_username                 = local.build_username
+    root_password_hash             = local.root_password_hash
+    build_password_hash            = local.build_password_hash
+    ssh_public_key_root_authorized = local.ssh_public_key_root_authorized
+    ssh_public_key_build           = var.ssh_public_key_build
+  })
 }
 
 source "proxmox-clone" "cloud" {

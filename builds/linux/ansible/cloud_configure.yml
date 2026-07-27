@@ -26,6 +26,7 @@
       - git
       - ipa-client
       - nfs-utils
+      - openssh-server
       - python3
       - rsync
       - sssd
@@ -106,7 +107,10 @@
         enabled: false
       failed_when: false
 
-    - name: Template cleanup
+    # Shared with the kickstart builds: CA trust (Vault bundle + web-mirror
+    # root/intermediate certs), UTC RTC + chronyd/chrony-wait, host-key and
+    # machine-id cleanup.
+    - name: CA trust, time-sync hardening, and template cleanup
       ansible.builtin.import_tasks: tasks/common_cleanup.yml
 
     - name: Unregister from Red Hat Subscription Management

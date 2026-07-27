@@ -1,0 +1,36 @@
+#cloud-config
+# Packer build seed for RHEL/Rocky cloud-image templates (rendered by
+# templatefile() in cloud-clone-build.pkr.hcl; discarded with the seed ISO
+# after the build).
+#
+# This seed intentionally does the MINIMUM needed for packer to connect:
+# qemu-guest-agent (packer discovers the VM's IP through the agent) plus the
+# same users/passwords/keys the kickstart builds bake. Package parity with
+# the ISO builds (git, zsh, rsync, curl, cloud-init, ...), the sudoers.d
+# entry, sshd drop-in, authselect, timezone, services, CA trust, and cleanup
+# all happen in builds/linux/ansible/cloud_configure.yml, which packer runs
+# next — keep parity changes there, not here.
+${rh_subscription_block}
+packages:
+  - qemu-guest-agent
+disable_root: false
+ssh_pwauth: true
+users:
+  - default
+  - name: root
+    lock_passwd: false
+    hashed_passwd: ${root_password_hash}
+    ssh_authorized_keys:
+      - ${ssh_public_key_root_authorized}
+      - ${ssh_public_key_build}
+  - name: ${build_username}
+    groups: wheel
+    shell: /bin/bash
+    sudo: ALL=(ALL) NOPASSWD:ALL
+    lock_passwd: false
+    hashed_passwd: ${build_password_hash}
+    ssh_authorized_keys:
+      - ${ssh_public_key_build}
+      - ${ssh_public_key_root_authorized}
+runcmd:
+  - systemctl enable --now qemu-guest-agent
