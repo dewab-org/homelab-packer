@@ -60,6 +60,9 @@
         state: present
         update_cache: true
 
+    # EL8's OpenSSH has no sshd_config.d include support — edit the main
+    # config there (same approach as the rhel8 kickstart %post sed), and use
+    # the 90-packer.conf drop-in on EL9/10 (same as their kickstarts).
     - name: Allow root login and password auth (parity with kickstart %post)
       ansible.builtin.copy:
         dest: /etc/ssh/sshd_config.d/90-packer.conf
@@ -70,6 +73,18 @@
         owner: root
         group: root
         mode: "0600"
+      when: ansible_distribution_major_version != '8'
+
+    - name: Allow root login and password auth on EL8 (main sshd_config)
+      ansible.builtin.lineinfile:
+        path: /etc/ssh/sshd_config
+        regexp: "^#?{{ item.key }} "
+        line: "{{ item.key }} {{ item.value }}"
+        validate: sshd -t -f %s
+      loop:
+        - {key: PermitRootLogin, value: "yes"}
+        - {key: PasswordAuthentication, value: "yes"}
+      when: ansible_distribution_major_version == '8'
 
     - name: Write build user sudoers entry (parity with kickstart %post)
       ansible.builtin.copy:

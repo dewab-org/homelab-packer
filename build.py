@@ -263,6 +263,7 @@ def run_packer(build_dir: Path, common_vars: Path, args: argparse.Namespace) -> 
 
 
 def run_build(build_dir: Path, common_vars: Path, args: argparse.Namespace) -> int:
+    print(f"===== BUILDING {build_dir} =====", flush=True)
     if not build_dir.is_dir():
         print(f"Unknown build directory: {build_dir}", file=sys.stderr)
         return 1
@@ -304,6 +305,10 @@ def main() -> int:
             print(f"  - {build_dir}", file=sys.stderr)
         return 1
 
+    # Keep going on failure: one flaky build must not abort the remaining
+    # targets in a full run. Failures are reported at the end and the exit
+    # code stays non-zero. init/validate still fail fast.
+    failures: list[str] = []
     for build in targets:
         build_dir = root / build
         if args.init_only:
@@ -314,8 +319,15 @@ def main() -> int:
                 status = run_packer_validate(build_dir, common_vars)
         else:
             status = run_build(build_dir, common_vars, args)
+            if status != 0:
+                failures.append(build)
+                print(f"BUILD FAILED (continuing): {build}", file=sys.stderr)
+                continue
         if status != 0:
             return status
+    if failures:
+        print(f"FAILED BUILDS: {', '.join(failures)}", file=sys.stderr)
+        return 1
     return 0
 
 
