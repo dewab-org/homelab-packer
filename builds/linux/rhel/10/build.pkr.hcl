@@ -91,7 +91,7 @@ source "proxmox-iso" "rhel_10" {
 
   ssh_username = local.build_username
   ssh_private_key_file = var.ssh_private_key_file
-  ssh_timeout  = "15m"
+  ssh_timeout  = "30m"
 
   additional_iso_files {
     cd_content       = { "/ks.cfg" = local.kickstart_content }

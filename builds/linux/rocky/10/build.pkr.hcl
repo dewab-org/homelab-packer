@@ -87,15 +87,15 @@ source "proxmox-iso" "rocky_10" {
     unmount          = true
   }
 
-  boot_wait = "6s"
+  boot_wait = "12s"
   boot      = "order=scsi0;ide2"
   boot_command = [
-    "<up>e<down><down><end> inst.text inst.ks=cdrom console=ttyS0,115200n8 <leftCtrlOn>x<leftCtrlOff>"
+    "<up><wait2>e<wait1><down><down><end> inst.text inst.ks=cdrom console=ttyS0,115200n8 <wait><leftCtrlOn>x<leftCtrlOff>"
   ]
 
   ssh_username = local.build_username
   ssh_private_key_file = var.ssh_private_key_file
-  ssh_timeout  = "15m"
+  ssh_timeout  = "30m"
 
   additional_iso_files {
     cd_content       = { "/ks.cfg" = local.kickstart_content }
