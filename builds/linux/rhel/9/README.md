@@ -3,6 +3,7 @@
 Build for RHEL 9 with kickstart and Cloud-Init enabled.
 
 Notes:
+
 - Activation key env: REDHAT_SATELLITE_ACTIVATION_KEY_RHEL9
 - Satellite server env: REDHAT_SATELLITE_SERVER
 - Uses kickstart template in `kickstart/ks.pkrtpl.hcl`.
