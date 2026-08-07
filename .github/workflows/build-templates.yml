@@ -2,6 +2,26 @@ name: build-templates
 
 on:
   push:
+    branches:
+      - main
+    # Only rebuild when something that actually changes a template changes.
+    # This was previously a bare `push:`, so a docs-only commit kicked off a
+    # full ~2h 14-target rebuild — and the concurrency cancel that followed
+    # stranded a half-built VM at its VMID, which then failed the next run
+    # with "found matching VM but it is not a template".
+    paths:
+      - "builds/**"
+      - "!builds/**/*.md"
+      - "build.py"
+      - "ansible.cfg"
+      - "requirements.txt"
+      - "requirements.yml"
+      - "variables.auto.pkrvars.hcl"
+      # Deliberately NOT self-triggering on this workflow file: a full
+      # rebuild is ~2h across 14 targets, and editing the pipeline does not
+      # change template contents. Validate workflow edits with
+      # workflow_dispatch, or let the Sunday schedule pick them up.
+      # (dhcp's publish-images.yml does self-trigger — those builds are ~40s.)
   schedule:
     # Weekly full template rebuild: Sundays 14:00 UTC (09:00 CDT). Clear of
     # the nightly job band (02:00-12:00 UTC) and the Sunday HA-upgrade (10:00)
