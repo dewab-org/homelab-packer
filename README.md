@@ -104,6 +104,45 @@ template rather than renumbering a working one. `9401` was likewise carrying a
 misleading `-base` suffix in Proxmox — it is an ISO build, not a cloud base —
 and has been renamed to match this table.
 
+### Windows cloud images
+
+Built by cloning a base template imported from a Microsoft evaluation VHD/VHDX,
+which skips Windows Setup entirely (no `boot_command`, no keystroke timing).
+
+| Template | Firmware | Disk |
+| --- | --- | --- |
+| `9432 windows-server-2022-desktop-experience-cloud` | SeaBIOS (MBR) | 40 G |
+| `9434 windows-server-2025-desktop-experience-cloud` | OVMF (GPT) | 64 G |
+
+**The base templates (9422/9424) are not kept.** Each is ~10 G of a 338 G thin
+pool and exists only so Packer can clone without re-importing. Recreate one
+before building:
+
+```sh
+set -a && source .env && set +a
+builds/windows/common/scripts/reimport-windows-base.sh both   # or 2022 / 2025
+./build.py builds/windows/windows-server-2022-desktop-experience-cloud
+```
+
+That wrapper renders the answer file from `autounattend-vhd.pkrtpl.xml` with the
+Vault build credentials and injects it offline into
+`\Windows\Panther\unattend.xml`. Do not skip it and hand-copy an old
+`unattend.xml`: OOBE reads answer files only from fixed on-disk locations (the
+removable-media search is a Windows *Setup* behaviour), and a stale one leaves
+the guest sitting at OOBE with no obvious error.
+
+Known gaps, both deliberate:
+
+- **`switch_to_virtio` is off.** Templates ship on SATA/e1000. Moving the boot
+  disk to virtio-scsi yields clones that boot into the Recovery Environment —
+  having viostor/vioscsi in the driver store does not make the controller
+  boot-critical. A fix needs a scratch virtio-scsi disk attached during the
+  build so Windows enumerates the controller first.
+- **Cloudbase-Init is not installed.** `cloudbase.it` is unreachable from this
+  lab, so a clone will not consume its cloud-init drive. Mirror the MSI to
+  `web.viking.org/cdimages/Microsoft/` and uncomment `cloudbase_init_url` in the
+  cloud vars files to close this.
+
 **Edition selection differs between the two paths.** An ISO carries several
 editions in `install.wim` and the build picks one with `windows_image_index`
 (`1` = Core, `2` = Desktop Experience). A VHD/VHDX contains a *single already
