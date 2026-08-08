@@ -186,7 +186,12 @@ build {
   // Runs against the Proxmox API after the template is created, because
   // proxmox-clone inherits the base's hardware and exposes no bus setting.
   post-processor "shell-local" {
-    only = var.switch_to_virtio ? ["proxmox-clone.windows_cloud"] : []
+    // Gating is done inside the script via SWITCH_TO_VIRTIO, NOT with `only`.
+    // An empty `only` list means "no source filter", i.e. run everywhere — so
+    // `only = cond ? [...] : []` silently runs the post-processor when the
+    // condition is FALSE. That shipped a 2025 template on virtio-scsi that
+    // boots into the Recovery Environment, exactly what the flag was meant to
+    // prevent.
     // environment_vars, not inline args: switch-template-to-virtio.py reads the
     // Proxmox connection from the environment, matching
     // builds/linux/common/scripts/finalize-template-config.py. Omitting these
@@ -199,6 +204,7 @@ build {
       "PROXMOX_PASSWORD=${local.proxmox_password}",
       "PROXMOX_NODE=${local.proxmox_node}",
       "PROXMOX_VM_ID=${var.vm_id}",
+      "SWITCH_TO_VIRTIO=${var.switch_to_virtio}",
     ]
     command = "${path.root}/../common/scripts/switch-template-to-virtio.py"
   }

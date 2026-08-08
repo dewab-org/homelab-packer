@@ -94,6 +94,13 @@ def find_vm_node(prox: ProxmoxAPI, vm_id: int, requested_node: str | None) -> st
 
 def main() -> int:
     args = parse_args()
+
+    # Honour the flag here rather than in the post-processor's `only`, which
+    # cannot express "never" (an empty list disables filtering entirely).
+    if os.environ.get("SWITCH_TO_VIRTIO", "true").strip().lower() in ("false", "0", "no"):
+        print("SWITCH_TO_VIRTIO is false; leaving the template on SATA/e1000.")
+        return 0
+
     prox = proxmox_client(
         require(args.proxmox_url, "PROXMOX_URL"),
         require(args.proxmox_user, "PROXMOX_USERNAME"),

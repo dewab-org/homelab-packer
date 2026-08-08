@@ -21,9 +21,11 @@ win_language = "en-US"
 win_keyboard = "en-US"
 win_timezone = "Central Standard Time"
 
-# Move the finished template onto virtio-scsi/virtio-net once the guest tools
-# have installed the drivers. Set false to leave it on SATA/e1000.
-switch_to_virtio = true
+# Leave the template on SATA/e1000. Switching the boot disk to virtio-scsi
+# produces a template whose clones boot into the Windows Recovery Environment —
+# the guest tools put viostor/vioscsi in the driver store, but that does not make
+# the controller boot-critical. See switch_to_virtio in common/definitions.pkr.hcl.
+switch_to_virtio = false
 
 # Cloudbase-Init — the Windows counterpart to cloud-init, and what makes a clone
 # customisable at first boot from the Proxmox cloud-init drive.
