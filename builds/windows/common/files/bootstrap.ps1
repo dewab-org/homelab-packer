@@ -22,6 +22,10 @@ try {
 
     # Enable the core management paths during unattended setup so the template
     # is reachable even before later provisioners run.
+    # qemu-ga first: Packer discovers the VM IP via the guest agent, so on a
+    # vendor VHD (no agent preinstalled) WinRM is unreachable without it.
+    # Non-fatal by design; see the script header.
+    & "C:\\Install\\scripts\\01-install-qemu-ga.ps1"
     & "C:\\Install\\scripts\\02-enable-winrm.ps1"
     & "C:\\Install\\scripts\\10-enable-rdp.ps1"
     & "C:\\Install\\scripts\\12-enable-openssh.ps1"

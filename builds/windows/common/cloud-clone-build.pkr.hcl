@@ -11,9 +11,21 @@
 // the most fragile part of the ISO builds (boot_command keystroke timing).
 //
 // What a vendor VHD does NOT give you, unlike a Linux cloud image:
-//   * No cloud-init equivalent preinstalled. The image boots to an interactive
-//     OOBE and waits, so an unattend is still required — attached below as
-//     Autounattend.xml on a CD, which OOBE finds on removable media.
+//
+//   * No cloud-init equivalent preinstalled, so the image boots to an
+//     interactive OOBE and waits. The answer file is injected OFFLINE into the
+//     base at \Windows\Panther\unattend.xml by
+//     common/scripts/bootstrap-windows-base.sh — it is NOT delivered on the CD.
+//     Scanning removable media for Autounattend.xml is Windows *Setup*
+//     behaviour; an already-installed image resumes at the OOBE pass, which
+//     reads a fixed set of on-disk locations instead. The CD below still
+//     matters: the injected unattend runs bootstrap.cmd from it.
+//
+//   * No QEMU guest agent. Packer discovers the VM's IP by asking the agent, so
+//     without one the build waits on WinRM forever while the guest sits happily
+//     on a DHCP lease. 01-install-qemu-ga.ps1 installs it during bootstrap,
+//     before WinRM is needed.
+//
 //   * No virtio drivers. The base therefore boots SATA + e1000; virtio is
 //     installed in-guest by 03-install-virtio-guest-tools.ps1, after which the
 //     bus is switched by the post-processor (see switch_to_virtio).
@@ -61,6 +73,13 @@ source "proxmox-clone" "windows_cloud" {
   clone_vm_id = var.clone_vm_id
   full_clone  = true
 
+  // The plugin's default task_timeout is 1 minute, which is fine for the Linux
+  // cloud clones (9-13s observed) but not for Windows: the 2022 base is 40G and
+  // took 70s, so the very first run failed with "Wait timeout for ... qmclone"
+  // *after the clone had actually succeeded*, leaving an orphaned VM behind.
+  // 2025 is 64G and slower still.
+  task_timeout = var.clone_task_timeout
+
   vm_id                = var.vm_id
   vm_name              = "${var.template_name}-build"
   template_name        = var.template_name
@@ -84,6 +103,7 @@ source "proxmox-clone" "windows_cloud" {
       "/Autounattend.xml"                           = local.autounattend_xml
       "/bootstrap.cmd"                              = file("${path.root}/../common/files/bootstrap.cmd")
       "/bootstrap.ps1"                              = file("${path.root}/../common/files/bootstrap.ps1")
+      "/scripts/01-install-qemu-ga.ps1"             = file("${path.root}/../common/scripts/01-install-qemu-ga.ps1")
       "/scripts/02-enable-winrm.ps1"                = file("${path.root}/../common/scripts/02-enable-winrm.ps1")
       "/scripts/10-enable-rdp.ps1"                  = file("${path.root}/../common/scripts/10-enable-rdp.ps1")
       "/scripts/12-enable-openssh.ps1"              = file("${path.root}/../common/scripts/12-enable-openssh.ps1")

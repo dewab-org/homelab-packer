@@ -179,3 +179,10 @@ variable "switch_to_virtio" {
   type    = bool
   default = true
 }
+
+// Proxmox task timeout for the clone. Default 1m is too short for Windows-sized
+// disks; see the comment in cloud-clone-build.pkr.hcl.
+variable "clone_task_timeout" {
+  type    = string
+  default = "20m"
+}
