@@ -16,7 +16,11 @@ win_keyboard = "en-US"
 win_timezone = "Central Standard Time"
 
 # Optional, but recommended to keep stable VMIDs per template.
-vm_id = 9402
+# 9403, not 9402: an earlier desktop-experience build landed at 9402
+# (2026-03-12) and was superseded by a rebuild at 9403 (2026-03-14) that took
+# the canonical name. The repo tracks the live template rather than renumbering
+# it. 9402 is free. See README "Windows VMID map".
+vm_id = 9403
 
 # Pin Desktop Experience explicitly. On the current Server 2025 eval ISO,
 # index 2 is Standard Desktop Experience while index 1 is Standard Core.

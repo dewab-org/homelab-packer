@@ -84,6 +84,33 @@ rebuild the thing that changed.
   - RHEL 8/9/10 ISO: 9108/9109/9110; cloud-base: 9128/9129/9130; cloud: 9138/9139/9140
   - Rocky 8/9/10 ISO: 9208/9209/9210; cloud-base: 9228/9229/9230; cloud: 9238/9239/9240
   - Ubuntu 24.04 ISO/autoinstall: 9301; cloud-base: 9310; cloud: 9311
+
+### Windows VMID map
+
+The `+20/+30` arithmetic does not extend cleanly to Windows (Ubuntu already
+breaks it too), so the Windows allocation is an explicit table:
+
+| Build | ISO | cloud-base | cloud |
+| --- | --- | --- | --- |
+| Server 2022 Core | *(ISO-only, see below)* | 9421 | 9431 |
+| Server 2022 Desktop Experience | — | 9422 | 9432 |
+| Server 2025 Core | 9401 | 9423 | 9433 |
+| Server 2025 Desktop Experience | 9403 | 9424 | 9434 |
+
+`9402` is intentionally free. An early Server 2025 desktop-experience build
+landed there on 2026-03-12 and was superseded by a rebuild at `9403` on
+2026-03-14 which took the canonical name; the repo now tracks the live
+template rather than renumbering a working one. `9401` was likewise carrying a
+misleading `-base` suffix in Proxmox — it is an ISO build, not a cloud base —
+and has been renamed to match this table.
+
+**Edition selection differs between the two paths.** An ISO carries several
+editions in `install.wim` and the build picks one with `windows_image_index`
+(`1` = Core, `2` = Desktop Experience). A VHD/VHDX contains a *single already
+installed* edition, so there is no index to choose: one image yields one
+flavour. Microsoft publishes eval VHDs for Desktop Experience but not for
+Core, so a Core template generally still has to come from the ISO path.
+
 - RHEL ISO storage pool: `iso_images` with the following filenames:
   - `rhel-8.10-x86_64-dvd.iso`
   - `rhel-9.8-x86_64-dvd.iso`
