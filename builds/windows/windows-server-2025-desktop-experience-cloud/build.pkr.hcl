@@ -1,0 +1,1 @@
+../common/cloud-clone-build.pkr.hcl

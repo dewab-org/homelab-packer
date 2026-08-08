@@ -1,0 +1,114 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  Unattend for builds that CLONE a vendor VHD/VHDX rather than install from ISO.
+
+  Deliberately has no windowsPE pass. That pass exists to drive Windows Setup:
+  load storage drivers, partition the disk, pick an edition from install.wim.
+  A prebuilt vendor image has already been installed and generalised, so Setup
+  never runs and those settings would simply be ignored.
+
+  Two consequences follow, and both are load-bearing:
+
+    * No <ImageInstall>/<InstallFrom> and no windows_image_index. A VHD holds a
+      single already-installed edition; there is no image to choose. Microsoft
+      publishes Desktop Experience eval VHDs but not Core, so Core still comes
+      from the ISO path (files/autounattend.pkrtpl.xml in the ISO build dirs).
+
+    * No PnpCustomizationsWinPE driver paths. VirtIO storage drivers cannot be
+      injected here because there is no WinPE phase; the image therefore boots
+      on SATA and picks up virtio in-guest via
+      common/scripts/03-install-virtio-guest-tools.ps1.
+
+  Windows searches removable media for an unattend at OOBE, which is how this
+  reaches the guest: Packer attaches it as Autounattend.xml on an additional
+  CD-ROM. The bootstrap command scans drive letters because the CD's letter is
+  not predictable.
+-->
+<unattend xmlns="urn:schemas-microsoft-com:unattend">
+    <settings pass="specialize">
+        <component name="Microsoft-Windows-Deployment" processorArchitecture="amd64" publicKeyToken="31bf3856ad364e35" language="neutral" versionScope="nonSxS" xmlns:wcm="http://schemas.microsoft.com/WMIConfig/2002/State" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance">
+            <RunSynchronous>
+                <RunSynchronousCommand wcm:action="add">
+                    <Order>1</Order>
+                    <Description>Bootstrap Packer Guest</Description>
+                    <Path>cmd.exe /c for %i in (D E F G H I J K L M N O P) do if exist %i:\bootstrap.cmd call %i:\bootstrap.cmd</Path>
+                    <WillReboot>Never</WillReboot>
+                </RunSynchronousCommand>
+            </RunSynchronous>
+        </component>
+        <component name="Microsoft-Windows-Shell-Setup" processorArchitecture="amd64" publicKeyToken="31bf3856ad364e35" language="neutral" versionScope="nonSxS" xmlns:wcm="http://schemas.microsoft.com/WMIConfig/2002/State" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance">
+            <TimeZone>${win_timezone}</TimeZone>
+            <ComputerName>*</ComputerName>
+        </component>
+        <component name="Microsoft-Windows-International-Core" processorArchitecture="amd64" publicKeyToken="31bf3856ad364e35" language="neutral" versionScope="nonSxS" xmlns:wcm="http://schemas.microsoft.com/WMIConfig/2002/State" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance">
+            <InputLocale>${win_keyboard}</InputLocale>
+            <SystemLocale>${win_language}</SystemLocale>
+            <UILanguage>${win_language}</UILanguage>
+            <UserLocale>${win_language}</UserLocale>
+        </component>
+    </settings>
+
+    <settings pass="oobeSystem">
+        <component name="Microsoft-Windows-International-Core" processorArchitecture="amd64" publicKeyToken="31bf3856ad364e35" language="neutral" versionScope="nonSxS" xmlns:wcm="http://schemas.microsoft.com/WMIConfig/2002/State" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance">
+            <InputLocale>${win_keyboard}</InputLocale>
+            <SystemLocale>${win_language}</SystemLocale>
+            <UILanguage>${win_language}</UILanguage>
+            <UserLocale>${win_language}</UserLocale>
+        </component>
+        <component name="Microsoft-Windows-Shell-Setup" processorArchitecture="amd64" publicKeyToken="31bf3856ad364e35" language="neutral" versionScope="nonSxS" xmlns:wcm="http://schemas.microsoft.com/WMIConfig/2002/State" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance">
+            <AutoLogon>
+                <Password>
+                    <Value>${build_password}</Value>
+                    <PlainText>true</PlainText>
+                </Password>
+                <LogonCount>2</LogonCount>
+                <Username>Administrator</Username>
+                <Enabled>true</Enabled>
+            </AutoLogon>
+
+            <FirstLogonCommands>
+                <SynchronousCommand wcm:action="add">
+                    <Order>1</Order>
+                    <Description>Bootstrap Packer Guest</Description>
+                    <CommandLine>cmd.exe /c for %i in (D E F G H I J K L M N O P) do if exist %i:\bootstrap.cmd call %i:\bootstrap.cmd</CommandLine>
+                    <RequiresUserInput>false</RequiresUserInput>
+                </SynchronousCommand>
+                <SynchronousCommand wcm:action="add">
+                    <Order>2</Order>
+                    <Description>Disable Network Profile Prompt</Description>
+                    <CommandLine>cmd.exe /c reg add "HKLM\System\CurrentControlSet\Control\Network\NewNetworkWindowOff" /f</CommandLine>
+                    <RequiresUserInput>false</RequiresUserInput>
+                </SynchronousCommand>
+            </FirstLogonCommands>
+
+            <OOBE>
+                <HideEULAPage>true</HideEULAPage>
+                <HideLocalAccountScreen>true</HideLocalAccountScreen>
+                <HideOEMRegistrationScreen>true</HideOEMRegistrationScreen>
+                <HideOnlineAccountScreens>true</HideOnlineAccountScreens>
+                <HideWirelessSetupInOOBE>true</HideWirelessSetupInOOBE>
+                <NetworkLocation>Work</NetworkLocation>
+                <ProtectYourPC>3</ProtectYourPC>
+            </OOBE>
+
+            <UserAccounts>
+                <AdministratorPassword>
+                    <Value>${build_password}</Value>
+                    <PlainText>true</PlainText>
+                </AdministratorPassword>
+                <LocalAccounts>
+                    <LocalAccount wcm:action="add">
+                        <Password>
+                            <Value>${build_password}</Value>
+                            <PlainText>true</PlainText>
+                        </Password>
+                        <Description>Packer Build User</Description>
+                        <DisplayName>${build_username}</DisplayName>
+                        <Name>${build_username}</Name>
+                        <Group>Administrators</Group>
+                    </LocalAccount>
+                </LocalAccounts>
+            </UserAccounts>
+        </component>
+    </settings>
+</unattend>

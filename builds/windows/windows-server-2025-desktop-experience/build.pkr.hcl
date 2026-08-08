@@ -94,13 +94,13 @@ source "proxmox-iso" "windows_server_2025_desktop_experience" {
   additional_iso_files {
     cd_content = {
       "/Autounattend.xml"                           = local.autounattend_xml
-      "/bootstrap.cmd"                              = file("files/bootstrap.cmd")
-      "/bootstrap.ps1"                              = file("files/bootstrap.ps1")
-      "/scripts/02-enable-winrm.ps1"                = file("scripts/02-enable-winrm.ps1")
-      "/scripts/10-enable-rdp.ps1"                  = file("scripts/10-enable-rdp.ps1")
-      "/scripts/12-enable-openssh.ps1"              = file("scripts/12-enable-openssh.ps1")
-      "/scripts/30-ConfigureRemotingForAnsible.ps1" = file("scripts/30-ConfigureRemotingForAnsible.ps1")
-      "/scripts/31-ansible-winrm-enablecredssp.ps1" = file("scripts/31-ansible-winrm-enablecredssp.ps1")
+      "/bootstrap.cmd"                              = file("../common/files/bootstrap.cmd")
+      "/bootstrap.ps1"                              = file("../common/files/bootstrap.ps1")
+      "/scripts/02-enable-winrm.ps1"                = file("../common/scripts/02-enable-winrm.ps1")
+      "/scripts/10-enable-rdp.ps1"                  = file("../common/scripts/10-enable-rdp.ps1")
+      "/scripts/12-enable-openssh.ps1"              = file("../common/scripts/12-enable-openssh.ps1")
+      "/scripts/30-ConfigureRemotingForAnsible.ps1" = file("../common/scripts/30-ConfigureRemotingForAnsible.ps1")
+      "/scripts/31-ansible-winrm-enablecredssp.ps1" = file("../common/scripts/31-ansible-winrm-enablecredssp.ps1")
     }
     cd_label         = local.cd_label
     iso_storage_pool = local.iso_storage_pool
@@ -154,20 +154,20 @@ build {
       "CLOUDBASE_INIT_CHECKSUM=${local.cloudbase_init_checksum_env}",
     ]
     scripts = [
-      "${path.root}/scripts/03-install-virtio-guest-tools.ps1",
-      "${path.root}/scripts/10-enable-rdp.ps1",
-      "${path.root}/scripts/12-enable-openssh.ps1",
-      "${path.root}/scripts/30-ConfigureRemotingForAnsible.ps1",
-      "${path.root}/scripts/31-ansible-winrm-enablecredssp.ps1",
-      "${path.root}/scripts/11-enable-icmp.ps1",
-      "${path.root}/scripts/20-set-temp.ps1",
-      "${path.root}/scripts/59-install-winget.ps1",
-      "${path.root}/scripts/60-install-cloudbase-init.ps1",
-      "${path.root}/scripts/70-bginfo.ps1",
-      "${path.root}/scripts/90-customization.ps1",
-      "${path.root}/scripts/998-cleanup.ps1",
+      "${path.root}/../common/scripts/03-install-virtio-guest-tools.ps1",
+      "${path.root}/../common/scripts/10-enable-rdp.ps1",
+      "${path.root}/../common/scripts/12-enable-openssh.ps1",
+      "${path.root}/../common/scripts/30-ConfigureRemotingForAnsible.ps1",
+      "${path.root}/../common/scripts/31-ansible-winrm-enablecredssp.ps1",
+      "${path.root}/../common/scripts/11-enable-icmp.ps1",
+      "${path.root}/../common/scripts/20-set-temp.ps1",
+      "${path.root}/../common/scripts/59-install-winget.ps1",
+      "${path.root}/../common/scripts/60-install-cloudbase-init.ps1",
+      "${path.root}/../common/scripts/70-bginfo.ps1",
+      "${path.root}/../common/scripts/90-customization.ps1",
+      "${path.root}/../common/scripts/998-cleanup.ps1",
       # NOTE: sysprep will break WinRM connectivity; keep disabled until the rest of the flow is stable.
-      # "${path.root}/scripts/999-sysprep.ps1",
+      # "${path.root}/../common/scripts/999-sysprep.ps1",
     ]
   }
 }
