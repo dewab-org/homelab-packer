@@ -10,11 +10,23 @@ install a driver from a disk it is unable to read. The ISO builds avoid this by
 loading drivers during Setup's windowsPE phase; a prebuilt image never runs
 Setup, so the base template must boot on SATA with an e1000 NIC.
 
-By the time this runs, 03-install-virtio-guest-tools.ps1 has installed
-viostor/vioscsi/netkvm into the driver store and registered the storage driver
-as boot-critical, so the disk can be moved to the virtio-scsi controller and the
-NIC to virtio. Doing it here rather than in the base keeps the base bootable
-from the vendor image alone.
+DOES NOT CURRENTLY WORK — disabled by default (switch_to_virtio = false).
+
+The theory was that once 03-install-virtio-guest-tools.ps1 had put
+viostor/vioscsi/netkvm in the driver store, the disk could simply be moved to
+the virtio-scsi controller. It cannot: a clone of the switched template boots
+straight into the Windows Recovery Environment. Having the driver in the store
+is not the same as having the storage controller registered boot-critical, so
+Windows cannot find its system disk on the new bus.
+
+Making this work needs the controller present at boot *before* the switch —
+attach a scratch virtio-scsi disk during the build so Windows enumerates the
+controller and activates the driver, then move the system disk and drop the
+scratch. Until that is implemented and verified end to end, templates ship on
+SATA/e1000, which is fine for the test VMs these are for.
+
+The script itself is correct and idempotent (verified with --dry-run); it is the
+premise above that was wrong.
 
 Reads PROXMOX_URL / PROXMOX_USERNAME / PROXMOX_PASSWORD / PROXMOX_NODE /
 PROXMOX_VM_ID from the environment, as supplied by the packer shell-local
@@ -128,10 +140,13 @@ def main() -> int:
             print(f"VMID {vm_id}: net0 e1000 -> virtio")
 
     if disk_changed and not args.dry_run:
-        boot = vm.config.get().get("boot", "")
-        if "sata0" in boot:
-            vm.config.put(boot="order=scsi0")
-            print(f"VMID {vm_id}: boot order updated to scsi0")
+        # Unconditionally point boot at scsi0. The old code only rewrote the
+        # order when it already mentioned sata0 — but Packer leaves the finished
+        # template booting from the virtio CD (sata1), so the condition never
+        # matched and the template was left booting from a device that no longer
+        # exists. Observed: clone hung at the SeaBIOS splash.
+        vm.config.put(boot="order=scsi0")
+        print(f"VMID {vm_id}: boot order set to scsi0")
 
     return 0
 

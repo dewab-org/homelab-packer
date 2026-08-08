@@ -25,17 +25,22 @@
   not predictable.
 -->
 <unattend xmlns="urn:schemas-microsoft-com:unattend">
+    <!--
+      NOTE: no RunSynchronousCommand here, deliberately.
+
+      The ISO unattend bootstraps from BOTH specialize and oobeSystem. On a
+      prebuilt image that is actively harmful: the specialize copy runs as
+      SYSTEM in a half-configured OS, where the qemu-ga MSI fails with 1603 and
+      Add-WindowsCapability (OpenSSH) blocks on Windows Update indefinitely.
+      specialize then never completes, so OOBE never finishes and the
+      FirstLogonCommands below never fire — the guest sits at "Getting ready"
+      forever. Observed exactly that; the transcript showed
+      "qemu-ga installer returned 1603" under "Username: \SYSTEM".
+
+      Bootstrapping only from oobeSystem runs it once, as Administrator, in a
+      fully booted OS.
+    -->
     <settings pass="specialize">
-        <component name="Microsoft-Windows-Deployment" processorArchitecture="amd64" publicKeyToken="31bf3856ad364e35" language="neutral" versionScope="nonSxS" xmlns:wcm="http://schemas.microsoft.com/WMIConfig/2002/State" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance">
-            <RunSynchronous>
-                <RunSynchronousCommand wcm:action="add">
-                    <Order>1</Order>
-                    <Description>Bootstrap Packer Guest</Description>
-                    <Path>cmd.exe /c for %i in (D E F G H I J K L M N O P) do if exist %i:\bootstrap.cmd call %i:\bootstrap.cmd</Path>
-                    <WillReboot>Never</WillReboot>
-                </RunSynchronousCommand>
-            </RunSynchronous>
-        </component>
         <component name="Microsoft-Windows-Shell-Setup" processorArchitecture="amd64" publicKeyToken="31bf3856ad364e35" language="neutral" versionScope="nonSxS" xmlns:wcm="http://schemas.microsoft.com/WMIConfig/2002/State" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance">
             <TimeZone>${win_timezone}</TimeZone>
             <ComputerName>*</ComputerName>

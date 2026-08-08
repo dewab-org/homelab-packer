@@ -52,8 +52,9 @@ locals {
   cloudbase_init_url_env      = var.cloudbase_init_url != null ? var.cloudbase_init_url : ""
   cloudbase_init_checksum_env = var.cloudbase_init_checksum != null ? var.cloudbase_init_checksum : ""
 
-  // VHD variant: specialize + oobeSystem only. See the file header for why
-  // windowsPE and windows_image_index are absent.
+  // Rendered for reference and for common/scripts/bootstrap-windows-base.sh,
+  // which injects it into the base image offline. Not shipped on the CD:
+  // OOBE does not read answer files from removable media.
   autounattend_xml = templatefile("${path.root}/../common/files/autounattend-vhd.pkrtpl.xml", {
     win_language   = var.win_language
     win_keyboard   = var.win_keyboard
@@ -97,18 +98,16 @@ source "proxmox-clone" "windows_cloud" {
   // redeclared here: proxmox-clone takes the source VM's hardware, and the base
   // deliberately differs per release (2022 is MBR/SeaBIOS, 2025 is GPT/OVMF).
 
-  // Autounattend + bootstrap + the scripts the unattend runs before WinRM is up.
+  // Bootstrap payload only. The answer file is NOT here — it lives in the base
+  // image at \Windows\Panther\unattend.xml (see the header); the injected
+  // unattend invokes bootstrap.cmd from this CD at first logon.
   additional_iso_files {
     cd_content = {
-      "/Autounattend.xml"                           = local.autounattend_xml
       "/bootstrap.cmd"                              = file("${path.root}/../common/files/bootstrap.cmd")
-      "/bootstrap.ps1"                              = file("${path.root}/../common/files/bootstrap.ps1")
+      "/bootstrap.ps1"                              = file("${path.root}/../common/files/bootstrap-vhd.ps1")
       "/scripts/01-install-qemu-ga.ps1"             = file("${path.root}/../common/scripts/01-install-qemu-ga.ps1")
+      "/scripts/03-install-virtio-guest-tools.ps1"  = file("${path.root}/../common/scripts/03-install-virtio-guest-tools.ps1")
       "/scripts/02-enable-winrm.ps1"                = file("${path.root}/../common/scripts/02-enable-winrm.ps1")
-      "/scripts/10-enable-rdp.ps1"                  = file("${path.root}/../common/scripts/10-enable-rdp.ps1")
-      "/scripts/12-enable-openssh.ps1"              = file("${path.root}/../common/scripts/12-enable-openssh.ps1")
-      "/scripts/30-ConfigureRemotingForAnsible.ps1" = file("${path.root}/../common/scripts/30-ConfigureRemotingForAnsible.ps1")
-      "/scripts/31-ansible-winrm-enablecredssp.ps1" = file("${path.root}/../common/scripts/31-ansible-winrm-enablecredssp.ps1")
     }
     cd_label         = local.cd_label
     iso_storage_pool = local.iso_storage_pool
@@ -142,23 +141,40 @@ build {
   }
 
   provisioner "powershell" {
+    // Run via a scheduled task as the build user rather than straight over
+    // WinRM. DISM-backed operations (Add-WindowsCapability for OpenSSH, and
+    // some of the feature installs below) fail with "Access is denied" in a
+    // plain WinRM session because it does not carry a fully elevated token.
+    elevated_user     = local.build_username
+    elevated_password = local.build_password
+
     environment_vars = [
       "CLOUDBASE_INIT_URL=${local.cloudbase_init_url_env}",
       "CLOUDBASE_INIT_CHECKSUM=${local.cloudbase_init_checksum_env}",
     ]
     scripts = [
-      // Must run first: everything after this depends on virtio being present
-      // in the driver store for the post-build bus switch to be safe.
-      "${path.root}/../common/scripts/03-install-virtio-guest-tools.ps1",
+      // 03-install-virtio-guest-tools runs in bootstrap (pre-WinRM), not here:
+      // the guest agent needs its virtio-serial driver before Packer can find
+      // the VM at all. By this point the drivers are already installed.
       "${path.root}/../common/scripts/10-enable-rdp.ps1",
       "${path.root}/../common/scripts/12-enable-openssh.ps1",
       "${path.root}/../common/scripts/30-ConfigureRemotingForAnsible.ps1",
       "${path.root}/../common/scripts/31-ansible-winrm-enablecredssp.ps1",
       "${path.root}/../common/scripts/11-enable-icmp.ps1",
       "${path.root}/../common/scripts/20-set-temp.ps1",
-      "${path.root}/../common/scripts/59-install-winget.ps1",
+      // 59-install-winget deliberately omitted. It installs an Appx/MSIX
+      // package, which cannot deploy from the scheduled-task session that
+      // elevated_user creates (HRESULT 0x80073D19 "a user was logged off"),
+      // and Server 2022 lacks the Microsoft.WindowsAppRuntime framework the
+      // App Installer depends on. Both are platform limits, not config bugs.
+      // Install winget by hand on a clone if a specific test needs it.
       "${path.root}/../common/scripts/60-install-cloudbase-init.ps1",
-      "${path.root}/../common/scripts/70-bginfo.ps1",
+      // 70-bginfo deliberately omitted: it downloads Bginfo64.exe from
+      // Sysinternals and this lab has no egress to it ("Bginfo64.exe not
+      // found" after the fetch silently produced nothing). It is cosmetic
+      // (desktop wallpaper), so it is dropped rather than mirrored. The same
+      // applies to cloudbase.it — see cloudbase_init_url in the vars file,
+      // which is NOT cosmetic and should be mirrored.
       "${path.root}/../common/scripts/90-customization.ps1",
       "${path.root}/../common/scripts/998-cleanup.ps1",
       // sysprep breaks WinRM; keep it last and disabled until the flow is proven.
@@ -170,9 +186,20 @@ build {
   // Runs against the Proxmox API after the template is created, because
   // proxmox-clone inherits the base's hardware and exposes no bus setting.
   post-processor "shell-local" {
-    only   = var.switch_to_virtio ? ["proxmox-clone.windows_cloud"] : []
-    inline = [
-      "python3 ${path.root}/../common/scripts/switch-template-to-virtio.py --vm-id ${var.vm_id}",
+    only = var.switch_to_virtio ? ["proxmox-clone.windows_cloud"] : []
+    // environment_vars, not inline args: switch-template-to-virtio.py reads the
+    // Proxmox connection from the environment, matching
+    // builds/linux/common/scripts/finalize-template-config.py. Omitting these
+    // fails the post-processor with "PROXMOX_URL is required" *after* the
+    // template has been converted, and packer then deletes it as a failed
+    // artifact — losing a 16-minute build for a missing variable.
+    environment_vars = [
+      "PROXMOX_URL=${local.proxmox_url}",
+      "PROXMOX_USERNAME=${local.proxmox_user}",
+      "PROXMOX_PASSWORD=${local.proxmox_password}",
+      "PROXMOX_NODE=${local.proxmox_node}",
+      "PROXMOX_VM_ID=${var.vm_id}",
     ]
+    command = "${path.root}/../common/scripts/switch-template-to-virtio.py"
   }
 }

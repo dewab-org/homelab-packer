@@ -171,13 +171,27 @@ variable "template_description_prefix" {
   default = "Windows cloud-image template"
 }
 
-// Post-build bus switch. The vendor VHD boots on SATA/e1000 because it carries
-// no virtio drivers; once 03-install-virtio-guest-tools.ps1 has installed them
-// the template can be flipped to virtio-scsi/virtio-net. Set false to leave the
-// template on SATA.
+// Post-build bus switch, DEFAULT OFF.
+//
+// The vendor VHD boots SATA/e1000 because it carries no virtio drivers, and the
+// intent was to flip the finished template to virtio-scsi/virtio-net once
+// 03-install-virtio-guest-tools.ps1 had installed them. That does not work as
+// implemented: a clone of the switched template boots into the Windows Recovery
+// Environment. Installing the guest tools puts viostor/vioscsi in the driver
+// store, but that alone does not make the storage controller boot-critical, so
+// Windows cannot find its system disk on the new bus.
+//
+// Making it work needs the controller present at boot before the switch — e.g.
+// attach a scratch virtio-scsi disk during the build so Windows enumerates the
+// controller and activates the driver, then move the system disk. Until that is
+// implemented and verified, templates ship on SATA/e1000, which is perfectly
+// adequate for the test VMs these are for.
+//
+// The NIC half is harmless on its own (virtio-net is not boot-critical), but the
+// switch is all-or-nothing today, so it stays off.
 variable "switch_to_virtio" {
   type    = bool
-  default = true
+  default = false
 }
 
 // Proxmox task timeout for the clone. Default 1m is too short for Windows-sized

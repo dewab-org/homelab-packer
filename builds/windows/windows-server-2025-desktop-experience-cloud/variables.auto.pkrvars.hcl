@@ -24,3 +24,22 @@ win_timezone = "Central Standard Time"
 # Move the finished template onto virtio-scsi/virtio-net once the guest tools
 # have installed the drivers. Set false to leave it on SATA/e1000.
 switch_to_virtio = true
+
+# Cloudbase-Init — the Windows counterpart to cloud-init, and what makes a clone
+# customisable at first boot from the Proxmox cloud-init drive.
+#
+# DELIBERATELY UNSET. cloudbase.it is not reachable from this lab (verified:
+# both the build guest and the Proxmox host itself get "Unable to connect to
+# the remote server" / HTTP 000), so pointing at the upstream URL fails the
+# build outright. With it unset, 60-install-cloudbase-init.ps1 logs
+# "Cloudbase-Init URL not set. Skipping" and continues.
+#
+# BE AWARE: that means the template ships WITHOUT Cloudbase-Init and a clone
+# will not consume its cloud-init drive. To close the gap, mirror the MSI
+# alongside the other images and point this at the internal copy:
+#
+#   https://web.viking.org/cdimages/Microsoft/CloudbaseInitSetup_Stable_x64.msi
+#
+# then set cloudbase_init_url (and ideally a sha256 checksum) here.
+# cloudbase_init_url      = "https://web.viking.org/cdimages/Microsoft/CloudbaseInitSetup_Stable_x64.msi"
+# cloudbase_init_checksum = "sha256:<fill in>"

@@ -23,8 +23,13 @@ function Show-Log {
     param (
         [string]$message
     )
+    # Write-Host only. This used to also Add-Content to $logFile, but
+    # Start-Transcript further down opens that same path and holds it, so every
+    # call failed with "The process cannot access the file ... because it is
+    # being used by another process" and aborted the script. The transcript
+    # already captures Write-Host, so the second write was redundant as well as
+    # broken.
     Write-Host $message
-    Add-Content -Path $logFile -Value $message
 }
 
 function Find-BGInfoPath {
