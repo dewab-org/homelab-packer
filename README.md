@@ -37,6 +37,40 @@ Packer templates for building Proxmox VM templates across Linux families, plus i
 ./build.py builds/linux/rhel/10
 ```
 
+## Build targets — cloud-image first
+
+`build.py` accepts a build directory or one of four keywords:
+
+| Target | Builds | |
+| --- | --- | --- |
+| `all` | the 7 `-cloud` builds | **default** |
+| `cloud` | same as `all` | explicit spelling |
+| `iso` | the 7 ISO/kickstart builds | opt-in |
+| `all-linux` | all 14 Linux builds | the pre-2026-08 `all` |
+
+```sh
+./build.py all          # cloud images (fast path)
+./build.py iso          # ISO/kickstart builds, explicitly
+./build.py builds/linux/rocky/9-cloud
+```
+
+**`all` means cloud-only on purpose.** Cloud builds clone a vendor qcow2 and
+take minutes; ISO builds drive an installer through a boot command and are far
+slower and more fragile — GRUB keystroke timing has broken them more than once.
+Both flavours run the same `builds/linux/ansible/` playbooks, so they install
+the same packages, CA certificates, and customisations; the resulting templates
+differ in how the base OS was laid down, not in what is on them.
+
+Reach for `iso` when a vendor cloud image genuinely will not do: a from-scratch
+partition layout, an install-time option such as FIPS or a STIG profile, or an
+OS with no published cloud image.
+
+CI follows the same rule. The weekly Sunday rebuild and any push-triggered
+build run the default (cloud-only); ISO templates are rebuilt on demand via
+`workflow_dispatch` with `build_target=iso`. Pushes that touch *only* an ISO
+build directory do not trigger CI at all, since the default target would not
+rebuild the thing that changed.
+
 ## Notes
 
 - Each RHEL release registers against Red Hat Network (RHN) using credentials from Vault (`secret/data/packer` in Packer, `secret/packer` via Vault CLI).

@@ -100,16 +100,48 @@ def list_build_dirs() -> list[str]:
     return build_dirs
 
 
+def is_linux(build_dir: str) -> bool:
+    return build_dir.startswith("builds/linux/")
+
+
+def is_cloud(build_dir: str) -> bool:
+    return build_dir.endswith("-cloud")
+
+
 def resolve_targets(target: str | None) -> list[str]:
+    """Map a target keyword or path to concrete build directories.
+
+    Keywords:
+      all       cloud-image builds only  <- the default, see below
+      cloud     same as "all", spelled explicitly
+      iso       ISO/kickstart builds only (opt-in)
+      all-linux every Linux build, cloud + ISO (the old "all")
+
+    "all" deliberately means *cloud only*. The cloud builds clone a vendor
+    qcow2 and are minutes each; the ISO builds drive an installer through a
+    boot command and are far slower and more fragile — GRUB keystroke timing
+    has broken them more than once. Both flavours install the same packages
+    and customisations (builds/linux/ansible/), so the ISO path earns its
+    keep only when a vendor cloud image will not do: a from-scratch
+    partition layout, a FIPS/STIG install-time option, or an OS with no
+    published cloud image.
+
+    Windows is excluded from every keyword: those builds are in-progress
+    stubs that cannot complete unattended. Build them explicitly with
+    ./build.py builds/windows/<name>.
+    """
     if not target:
         return []
 
     build_dirs = list_build_dirs()
-    if target == "all":
-        # "all" covers the Linux builds only: the Windows builds are
-        # in-progress stubs that cannot complete unattended in CI. Build them
-        # explicitly with ./build.py builds/windows/<name>.
-        return [d for d in build_dirs if d.startswith("builds/linux/")]
+    linux = [d for d in build_dirs if is_linux(d)]
+
+    if target in ("all", "cloud"):
+        return [d for d in linux if is_cloud(d)]
+    if target == "iso":
+        return [d for d in linux if not is_cloud(d)]
+    if target == "all-linux":
+        return linux
     if target in build_dirs:
         return [target]
     return []
@@ -294,12 +326,20 @@ def main() -> int:
     common_vars = root / "variables.auto.pkrvars.hcl"
 
     if not args.target:
-        print("Usage: build.py [--ask] [--overwrite] [--skip] [--init-only|--validate-only] [all|<build-dir>]")
+        print(
+            "Usage: build.py [--ask] [--overwrite] [--skip] "
+            "[--init-only|--validate-only] [all|cloud|iso|all-linux|<build-dir>]"
+        )
         return 1
 
     targets = resolve_targets(args.target)
     if not targets:
         print(f"Unknown build target: {args.target}", file=sys.stderr)
+        print("Target keywords:", file=sys.stderr)
+        print("  - all        cloud-image builds (default)", file=sys.stderr)
+        print("  - cloud      same as 'all'", file=sys.stderr)
+        print("  - iso        ISO/kickstart builds (opt-in)", file=sys.stderr)
+        print("  - all-linux  cloud + ISO", file=sys.stderr)
         print("Available build targets:", file=sys.stderr)
         for build_dir in list_build_dirs():
             print(f"  - {build_dir}", file=sys.stderr)

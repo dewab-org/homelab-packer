@@ -17,17 +17,32 @@ on:
       - "requirements.txt"
       - "requirements.yml"
       - "variables.auto.pkrvars.hcl"
-      # Deliberately NOT self-triggering on this workflow file: a full
-      # rebuild is ~2h across 14 targets, and editing the pipeline does not
-      # change template contents. Validate workflow edits with
-      # workflow_dispatch, or let the Sunday schedule pick them up.
+      # A push build runs build.py's default target, which is cloud-only, so
+      # editing an ISO-only build directory must not trigger it — it would
+      # rebuild seven cloud templates and not the thing that changed. The
+      # -cloud siblings are separate path segments and stay matched by
+      # "builds/**" above. Shared inputs (builds/linux/ansible,
+      # builds/linux/common) still trigger, correctly: they affect both
+      # flavours. Rebuild ISO templates with workflow_dispatch
+      # (build_target=iso).
+      - "!builds/linux/rhel/8/**"
+      - "!builds/linux/rhel/9/**"
+      - "!builds/linux/rhel/10/**"
+      - "!builds/linux/rocky/8/**"
+      - "!builds/linux/rocky/9/**"
+      - "!builds/linux/rocky/10/**"
+      - "!builds/linux/ubuntu/24.04/**"
+      # Deliberately NOT self-triggering on this workflow file: editing the
+      # pipeline does not change template contents. Validate workflow edits
+      # with workflow_dispatch, or let the Sunday schedule pick them up.
       # (dhcp's publish-images.yml does self-trigger — those builds are ~40s.)
   schedule:
-    # Weekly full template rebuild: Sundays 14:00 UTC (09:00 CDT). Clear of
-    # the nightly job band (02:00-12:00 UTC) and the Sunday HA-upgrade (10:00)
-    # / step-ca-restore-test (12:00) jobs. Scheduled runs use the input
-    # defaults (build_target=all, build_mode=overwrite). Note: scheduled
-    # workflows only fire on the default branch.
+    # Weekly template rebuild: Sundays 14:00 UTC (09:00 CDT). Clear of the
+    # nightly job band (02:00-12:00 UTC) and the Sunday HA-upgrade (10:00) /
+    # step-ca-restore-test (12:00) jobs. Scheduled runs use the input defaults
+    # (build_target=all, build_mode=overwrite), and "all" is cloud-only — the
+    # ISO builds are opt-in via build_target=iso. Note: scheduled workflows
+    # only fire on the default branch.
     - cron: "0 14 * * 0"
   workflow_dispatch:
     inputs:
@@ -41,7 +56,12 @@ on:
           - skip
           - default
       build_target:
-        description: Build target to pass to build.py
+        # Free-form so a single directory can be passed
+        # (e.g. builds/linux/rocky/9-cloud). Keywords:
+        #   all/cloud  cloud-image builds only (default)
+        #   iso        ISO/kickstart builds only
+        #   all-linux  both
+        description: "build.py target: all|cloud|iso|all-linux|<build-dir>"
         required: false
         default: all
         type: string
