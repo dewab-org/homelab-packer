@@ -173,6 +173,9 @@ build {
       "${path.root}/../common/scripts/31-ansible-winrm-enablecredssp.ps1",
       "${path.root}/../common/scripts/11-enable-icmp.ps1",
       "${path.root}/../common/scripts/20-set-temp.ps1",
+      // EMS/SAC on COM1 so the serials=["socket"] device actually carries a
+      // Windows console (self-verifies via bcdedit /enum).
+      "${path.root}/../common/scripts/15-enable-ems-serial.ps1",
       // 59-install-winget deliberately omitted. It installs an Appx/MSIX
       // package, which cannot deploy from the scheduled-task session that
       // elevated_user creates (HRESULT 0x80073D19 "a user was logged off"),
