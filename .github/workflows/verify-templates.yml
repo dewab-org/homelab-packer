@@ -1,0 +1,106 @@
+name: verify-templates
+
+# Link-clone verification for the cloud templates: clone each, attach a
+# cloud-init payload, boot, and prove remote access / user / CA / hostname
+# actually work, then destroy the clone. A template can build "successfully"
+# and still be unusable (Linux cloud-init that never re-arms, a Windows
+# template with no cloud-init drive), and only a clone-and-check catches that.
+#
+# Runs after a successful build-templates run, and on demand. Not on push —
+# it clones live VMs, so it should be deliberate.
+
+on:
+  workflow_run:
+    workflows: ["build-templates"]
+    types: [completed]
+  workflow_dispatch:
+    inputs:
+      templates:
+        description: "Template VMIDs to verify (space-separated)"
+        required: false
+        # All nine cloud templates by default. Windows: 9432/9434.
+        default: "9138 9139 9140 9238 9239 9240 9311 9432 9434"
+        type: string
+
+permissions:
+  contents: read
+
+concurrency:
+  # Shares the clone VMID range (9600+) and the Proxmox node with a build, so
+  # never run a verify concurrently with a build or another verify.
+  group: packer-target-environment
+  cancel-in-progress: false
+
+jobs:
+  verify:
+    name: Clone-verify templates
+    # Only run the auto-trigger if the build actually succeeded; the manual
+    # trigger has no preceding run to gate on.
+    if: >-
+      github.event_name == 'workflow_dispatch' ||
+      github.event.workflow_run.conclusion == 'success'
+    runs-on: arc-runners
+    timeout-minutes: 120
+    env:
+      VAULT_ADDR: ${{ vars.VAULT_ADDR }}
+      VAULT_TOKEN: ${{ secrets.VAULT_TOKEN }}
+      VAULT_CACERT: /tmp/vault-ca.pem
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install runner dependencies
+        shell: bash
+        run: |
+          set -euo pipefail
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends ca-certificates openssh-client
+          vault_version="1.19.5"
+          curl -fsSLo /tmp/vault.zip "https://releases.hashicorp.com/vault/${vault_version}/vault_${vault_version}_linux_amd64.zip"
+          sudo unzip -o /tmp/vault.zip vault -d /usr/local/bin
+          sudo chmod 0755 /usr/local/bin/vault
+
+      - name: Write Vault CA certificate
+        shell: bash
+        run: |
+          set -euo pipefail
+          printf '%s' "${{ secrets.VAULT_CACERT }}" > /tmp/vault-ca.pem
+          sudo install -m 0644 /tmp/vault-ca.pem /usr/local/share/ca-certificates/vault-viking-org.crt
+          sudo update-ca-certificates
+
+      - name: Install Python dependencies
+        shell: bash
+        run: |
+          set -euo pipefail
+          python -m venv .venv
+          . .venv/bin/activate
+          python -m pip install --upgrade pip
+          python -m pip install -r requirements.txt
+
+      - name: Clone-verify templates
+        shell: bash
+        run: |
+          set -euo pipefail
+          . .venv/bin/activate
+
+          # Proxmox connection comes from Vault (same secret packer's vault()
+          # function reads at build time); the workflow carries only VAULT_*.
+          export PROXMOX_URL="$(vault kv get -field=PROXMOX_URL secret/packer)"
+          export PROXMOX_USERNAME="$(vault kv get -field=PROXMOX_USERNAME secret/packer)"
+          export PROXMOX_PASSWORD="$(vault kv get -field=PROXMOX_PASSWORD secret/packer)"
+          export PROXMOX_NODE="$(vault kv get -field=PROXMOX_NODE secret/packer)"
+          export PROXMOX_STORAGE="$(vault kv get -field=PROXMOX_STORAGE secret/packer)"
+
+          templates="${{ github.event.inputs.templates }}"
+          if [ -z "$templates" ]; then
+            templates="9138 9139 9140 9238 9239 9240 9311 9432 9434"
+          fi
+
+          # The harness destroys every clone it creates, including on failure,
+          # via its own try/finally. Exit code is non-zero if any check fails.
+          python tests/clone-verify.py $templates

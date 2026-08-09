@@ -2,6 +2,7 @@
 
 [![build-templates](https://github.com/dewab/homelab-packer/actions/workflows/build-templates.yml/badge.svg)](https://github.com/dewab/homelab-packer/actions/workflows/build-templates.yml)
 [![validate-templates](https://github.com/dewab/homelab-packer/actions/workflows/validate-templates.yml/badge.svg)](https://github.com/dewab/homelab-packer/actions/workflows/validate-templates.yml)
+[![verify-templates](https://github.com/dewab/homelab-packer/actions/workflows/verify-templates.yml/badge.svg)](https://github.com/dewab/homelab-packer/actions/workflows/verify-templates.yml)
 [![gitleaks](https://github.com/dewab/homelab-packer/actions/workflows/gitleaks.yml/badge.svg)](https://github.com/dewab/homelab-packer/actions/workflows/gitleaks.yml)
 
 Packer templates for building Proxmox VM templates across Linux families, plus in-progress Windows templates.
@@ -70,6 +71,35 @@ build run the default (cloud-only); ISO templates are rebuilt on demand via
 `workflow_dispatch` with `build_target=iso`. Pushes that touch *only* an ISO
 build directory do not trigger CI at all, since the default target would not
 rebuild the thing that changed.
+
+## Clone verification
+
+A template that builds cleanly can still be unusable — Linux cloud-init that
+never re-arms silently skips user/password/hostname on a clone, and a Windows
+template can ship with no cloud-init drive. `tests/clone-verify.py` catches
+that: for each template it linked-clones it, attaches a cloud-init payload,
+boots it, and proves the guest was actually configured, then destroys the
+clone (always, even on failure).
+
+Checks per clone:
+
+- a login user was created from the cloud-init data
+- remote access works — SSH with the injected key (Linux), or a validated
+  credential (Windows)
+- the hostname became the clone's name (a template that did not re-arm keeps
+  the build hostname)
+- the homelab CA is present in the trust store
+
+```sh
+set -a && source .env && set +a
+export PROXMOX_URL=... PROXMOX_USERNAME=... PROXMOX_PASSWORD=... PROXMOX_NODE=...
+./tests/clone-verify.py 9239 9432          # rocky-9 + win-2022, or any VMIDs
+```
+
+CI runs it via the `verify-templates` workflow after every successful
+`build-templates` run, and on demand (`workflow_dispatch`). It clones live VMs,
+so it deliberately does not run on push and never runs concurrently with a
+build (shared concurrency group + the 9600+ clone VMID range).
 
 ## Notes
 
