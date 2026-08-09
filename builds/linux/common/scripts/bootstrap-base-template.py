@@ -56,6 +56,12 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--vlan-tag", type=int, default=int(os.environ.get("PROXMOX_VLAN_TAG", "10")))
     parser.add_argument("--memory-mb", type=int, default=int(os.environ.get("PROXMOX_BASE_MEMORY_MB", "2048")))
     parser.add_argument("--cores", type=int, default=int(os.environ.get("PROXMOX_BASE_CORES", "2")))
+    parser.add_argument(
+        "--disk-size",
+        default=os.environ.get("PROXMOX_BASE_DISK_SIZE", "60G"),
+        help="Grow the imported OS disk to this size (default 60G). Cloud images "
+        "import at only a few GB; build-time upgrades and clones need real space.",
+    )
     parser.add_argument("--image-url", default=os.environ.get("CLOUD_IMAGE_URL", DEFAULT_IMAGE_URL))
     parser.add_argument(
         "--checksum-url",
@@ -253,6 +259,24 @@ def create_base_template(prox: ProxmoxAPI, args: argparse.Namespace, import_voli
     }
     upid = prox.nodes(args.node).qemu.post(**create_params)
     wait_task(prox, upid)
+
+    # Cloud images import at their native (small) virtual size — a few GB. Grow
+    # the OS disk so build-time package upgrades have room and clones get a
+    # usable disk; cloud-init growpart expands the filesystem on first boot.
+    # Verify the resize took rather than trusting the call (validate, never
+    # assume success).
+    if args.disk_size:
+        print(f"Resizing scsi0 to {args.disk_size}")
+        prox.nodes(args.node).qemu(args.base_vm_id).resize.put(disk="scsi0", size=args.disk_size)
+        scsi0 = ""
+        for _ in range(30):
+            scsi0 = prox.nodes(args.node).qemu(args.base_vm_id).config.get().get("scsi0", "")
+            if f"size={args.disk_size}" in scsi0:
+                print(f"  scsi0 now: {scsi0}")
+                break
+            time.sleep(2)
+        else:
+            raise SystemExit(f"disk resize to {args.disk_size} did not take (scsi0={scsi0})")
 
     upid = prox.nodes(args.node).qemu(args.base_vm_id).template.post()
     wait_task(prox, upid)

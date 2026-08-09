@@ -102,8 +102,10 @@ jobs:
             echo "$k=$v" >> "$GITHUB_ENV"
           done
 
-      - name: Ensure clone-source base exists
+      - name: Ensure clone-source base exists and is the right size
         shell: bash
+        env:
+          DISK_TARGET: "60G"
         run: |
           set -euo pipefail
           . .venv/bin/activate
@@ -119,13 +121,19 @@ jobs:
             echo "could not find clone_vm_id in $dir/variables.auto.pkrvars.hcl" >&2
             exit 1
           fi
-          if python -c "import build,sys; p=build.proxmox_client(); \
-            sys.exit(0 if p and any(str(e.get('vmid'))=='$clone_id' for e in p.cluster.resources.get(type='vm')) else 3)"; then
-            echo "clone-source base $clone_id present; skipping bootstrap"
-          else
-            echo "clone-source base $clone_id MISSING; bootstrapping it"
-            eval "$cmd"
-          fi
+          # 0=ok/unqueryable, 3=missing, 4=undersized (wrong disk).
+          set +e
+          python -c "import sys, build; sys.exit(build.base_status('$clone_id', '$DISK_TARGET'))"
+          rc=$?
+          set -e
+          case "$rc" in
+            0) echo "clone-source base $clone_id OK; skipping bootstrap" ;;
+            3) echo "clone-source base $clone_id MISSING; bootstrapping"; eval "$cmd" ;;
+            4) echo "clone-source base $clone_id wrong size; rebuilding at $DISK_TARGET"
+               export OVERWRITE_EXISTING=true PROXMOX_BASE_DISK_SIZE="$DISK_TARGET"
+               eval "$cmd" ;;
+            *) echo "unexpected rc=$rc from base check" >&2; exit 1 ;;
+          esac
 
       - name: Initialize packer plugins
         shell: bash

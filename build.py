@@ -287,6 +287,37 @@ def verify_template_built(build_dir: Path, build_vars: Path) -> bool | None:
     return False
 
 
+def base_status(clone_vm_id: str, target_size: str) -> int:
+    """Report a clone-source base's state as an exit code (for CI).
+
+    0 = present and the OS disk is target_size (or Proxmox is unqueryable, so
+    the build proceeds and its own verify catches problems); 3 = missing;
+    4 = present but the disk is not target_size (undersized). Prints a note.
+    """
+    prox = proxmox_client()
+    if prox is None:
+        print("cannot query Proxmox; proceeding")
+        return 0
+    try:
+        entry = next(
+            (e for e in prox.cluster.resources.get(type="vm")
+             if str(e.get("vmid")) == str(clone_vm_id)),
+            None,
+        )
+    except Exception:
+        print("cannot query Proxmox; proceeding")
+        return 0
+    if entry is None:
+        print("MISSING")
+        return 3
+    scsi0 = prox.nodes(entry.get("node")).qemu(clone_vm_id).config.get().get("scsi0", "")
+    if f"size={target_size}" in scsi0:
+        print(f"OK ({scsi0})")
+        return 0
+    print(f"UNDERSIZED (scsi0={scsi0}, want size={target_size})")
+    return 4
+
+
 def build_packer_args(
     build_dir: Path,
     common_vars: Path,
