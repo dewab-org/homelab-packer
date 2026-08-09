@@ -4,5 +4,8 @@
   become: true
   gather_facts: false
   tasks:
+    - name: Upgrade all packages at build time (clones ship fully patched)
+      ansible.builtin.import_tasks: ../../../ansible/tasks/system_upgrade.yml
+
     - name: Run common cleanup tasks
       ansible.builtin.import_tasks: ../../../ansible/tasks/common_cleanup.yml

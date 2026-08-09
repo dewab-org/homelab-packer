@@ -64,6 +64,11 @@
       retries: "{{ rhel_net_retries }}"
       delay: "{{ rhel_net_delay }}"
 
+    # While RHEL is still registered (unregister happens at the end of this
+    # play): fully patch so clones ship up to date and have nothing to upgrade.
+    - name: Upgrade all packages at build time
+      ansible.builtin.import_tasks: tasks/system_upgrade.yml
+
     # EL8's OpenSSH has no sshd_config.d include support — edit the main
     # config there (same approach as the rhel8 kickstart %post sed), and use
     # the 90-packer.conf drop-in on EL9/10 (same as their kickstarts).

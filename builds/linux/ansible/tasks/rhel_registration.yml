@@ -84,6 +84,11 @@
   retries: "{{ rhel_net_retries }}"
   delay: "{{ rhel_net_delay }}"
 
+# Fully patch while still registered, so clones ship up to date. Must run
+# before the unregister tasks below (no repos once unregistered).
+- name: Upgrade all packages at build time
+  ansible.builtin.import_tasks: system_upgrade.yml
+
 - name: Unregister from Red Hat Satellite
   community.general.redhat_subscription:
     state: absent

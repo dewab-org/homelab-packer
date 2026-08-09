@@ -49,6 +49,9 @@
         state: present
         update_cache: true
 
+    - name: Upgrade all packages at build time (clones ship fully patched)
+      ansible.builtin.import_tasks: ../../../ansible/tasks/system_upgrade.yml
+
     - name: Symlink fdfind to fd
       ansible.builtin.file:
         src: /usr/bin/fdfind

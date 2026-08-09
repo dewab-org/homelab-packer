@@ -1,0 +1,42 @@
+---
+# Full system package upgrade at BUILD time. The templates pin a base image but
+# packages drift between the pinned image and now; upgrading here means clones
+# boot fully patched and have little or nothing to update on first boot (which
+# would otherwise need internet at clone time and slow every clone). Retries
+# because package mirrors / RHN fail transiently far more than for real.
+#
+# gather_facts is false in the configure plays, so detect the package manager by
+# binary presence rather than ansible_pkg_mgr. RHEL must still be registered
+# when this runs (repos), so import it inside the registered window.
+- name: Detect dnf
+  ansible.builtin.stat:
+    path: /usr/bin/dnf
+  register: _sysupg_dnf
+
+- name: Detect apt-get
+  ansible.builtin.stat:
+    path: /usr/bin/apt-get
+  register: _sysupg_apt
+
+- name: Upgrade all packages (dnf)
+  ansible.builtin.dnf:
+    name: "*"
+    state: latest
+    update_cache: true
+  register: _sysupg_dnf_run
+  until: _sysupg_dnf_run is succeeded
+  retries: "{{ system_upgrade_retries | default(5) }}"
+  delay: "{{ system_upgrade_delay | default(20) }}"
+  when: _sysupg_dnf.stat.exists
+
+- name: Upgrade all packages (apt dist-upgrade)
+  ansible.builtin.apt:
+    upgrade: dist
+    update_cache: true
+  register: _sysupg_apt_run
+  until: _sysupg_apt_run is succeeded
+  retries: "{{ system_upgrade_retries | default(5) }}"
+  delay: "{{ system_upgrade_delay | default(20) }}"
+  when:
+    - _sysupg_apt.stat.exists
+    - not _sysupg_dnf.stat.exists
