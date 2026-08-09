@@ -16,7 +16,11 @@ try {
     # Delete Windows temp files
     Write-Host "Deleting Windows temporary files..."
     try {
-        Remove-Item -Path "C:\Windows\Temp\*" -Recurse -Force
+        # Exclude packer-* : elevated_user re-sources its env-vars script
+        # from Temp between commands, so wiping it mid-run fails the build.
+        Get-ChildItem -Path "C:\Windows\Temp" -Force -ErrorAction SilentlyContinue |
+            Where-Object { $_.Name -notlike "packer-*" } |
+            Remove-Item -Recurse -Force -ErrorAction SilentlyContinue
     }
     catch {
         Write-Host "Error deleting Windows temporary files: $_"
@@ -25,7 +29,11 @@ try {
     # Delete user temp files
     Write-Host "Deleting user temporary files..."
     try {
-        Remove-Item -Path "${env:TEMP}\*" -Recurse -Force
+        # Exclude packer-* : elevated_user re-sources its env-vars script
+        # from Temp between commands, so wiping it mid-run fails the build.
+        Get-ChildItem -Path "${env:TEMP}" -Force -ErrorAction SilentlyContinue |
+            Where-Object { $_.Name -notlike "packer-*" } |
+            Remove-Item -Recurse -Force -ErrorAction SilentlyContinue
     }
     catch {
         Write-Host "Error deleting user temporary files: $_"

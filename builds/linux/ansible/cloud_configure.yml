@@ -132,7 +132,19 @@
       community.general.redhat_subscription:
         state: absent
       when: ansible_distribution == 'RedHat'
+      # Tolerated: the module errors when the box was never registered.
       failed_when: false
+
+    # failed_when: false above means a *failed* unregister also passes, and a
+    # template that ships still registered gives every clone the same RHSM
+    # identity. Verify the outcome instead of trusting the module: identity
+    # must be gone (rc != 0) once unregistration has actually happened.
+    - name: Verify RHSM identity is gone
+      ansible.builtin.command: subscription-manager identity
+      register: rhsm_identity
+      changed_when: false
+      failed_when: rhsm_identity.rc == 0
+      when: ansible_distribution == 'RedHat'
 
     - name: Remove unused packages
       ansible.builtin.dnf:

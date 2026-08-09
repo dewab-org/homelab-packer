@@ -53,3 +53,6 @@ pw.txt
 password*.txt
 credentials*.txt
 *apikey*.txt
+
+# Public CA bundle (root+intermediate, no keys) shipped to Windows guests
+!builds/windows/common/files/root_ca_bundle.pem

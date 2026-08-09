@@ -95,12 +95,6 @@ def find_vm_node(prox: ProxmoxAPI, vm_id: int, requested_node: str | None) -> st
 def main() -> int:
     args = parse_args()
 
-    # Honour the flag here rather than in the post-processor's `only`, which
-    # cannot express "never" (an empty list disables filtering entirely).
-    if os.environ.get("SWITCH_TO_VIRTIO", "true").strip().lower() in ("false", "0", "no"):
-        print("SWITCH_TO_VIRTIO is false; leaving the template on SATA/e1000.")
-        return 0
-
     prox = proxmox_client(
         require(args.proxmox_url, "PROXMOX_URL"),
         require(args.proxmox_user, "PROXMOX_USERNAME"),
@@ -110,6 +104,43 @@ def main() -> int:
     node = find_vm_node(prox, vm_id, args.node)
     vm = prox.nodes(node).qemu(vm_id)
     config = vm.config.get()
+
+    # --- always applied -----------------------------------------------------
+    # Packer leaves the cloned template with ostype "other". That matters beyond
+    # cosmetics: Proxmox only defaults citype to configdrive2 when ostype is a
+    # Windows version, and Cloudbase-Init cannot read the nocloud format. Set
+    # both explicitly so the cloud-init drive is actually consumable.
+    want_ostype = os.environ.get("WINDOWS_OSTYPE", "win10")
+    if config.get("ostype") != want_ostype:
+        vm.config.put(ostype=want_ostype)
+        print(f"VMID {vm_id}: ostype {config.get('ostype')} -> {want_ostype}")
+    if config.get("citype") != "configdrive2":
+        vm.config.put(citype="configdrive2")
+        print(f"VMID {vm_id}: citype {config.get('citype')} -> configdrive2")
+
+    # A cloud template without a cloud-init drive is a contradiction — clones
+    # would set ciuser/cipassword into config that nothing materialises, and
+    # Cloudbase-Init logs "No metadata service found". proxmox-clone drops the
+    # base's inherited cloud-init CD on clone (it is a per-VM generated drive,
+    # not cloneable), so ADD it here rather than depend on the source's
+    # cloud_init flag, which conflicts with the inherited drive. Then verify.
+    if "cloudinit" not in config.get("ide2", ""):
+        storage = os.environ.get("PROXMOX_STORAGE") or require(None, "PROXMOX_STORAGE")
+        vm.config.put(ide2=f"{storage}:cloudinit")
+        after = vm.config.get()
+        if "cloudinit" not in after.get("ide2", ""):
+            raise SystemExit(f"VMID {vm_id}: failed to add cloud-init drive on ide2")
+        print(f"VMID {vm_id}: cloud-init drive added ({after.get('ide2')})")
+    else:
+        print(f"VMID {vm_id}: cloud-init drive present ({config.get('ide2')})")
+
+    # --- optional: virtio bus switch ---------------------------------------
+    # Gated here rather than in the post-processor's `only`, which cannot
+    # express "never" (an empty list disables filtering entirely, so the false
+    # branch would run it).
+    if os.environ.get("SWITCH_TO_VIRTIO", "true").strip().lower() in ("false", "0", "no"):
+        print(f"VMID {vm_id}: SWITCH_TO_VIRTIO false; leaving disk/NIC on SATA/e1000.")
+        return 0
 
     sata0 = config.get("sata0")
     if not sata0:

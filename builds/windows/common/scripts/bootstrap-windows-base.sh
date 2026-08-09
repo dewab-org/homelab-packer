@@ -80,6 +80,11 @@ DISK=$(qm config "$VMID" | sed -n 's/^unused0: *//p')
 qm set "$VMID" --sata0 "${DISK},discard=on,ssd=1" >/dev/null
 qm set "$VMID" --boot order=sata0 >/dev/null
 qm set "$VMID" --ide2 "${STORAGE}:cloudinit" >/dev/null
+# citype MUST be configdrive2 for Windows: Cloudbase-Init does not read the
+# nocloud format. Proxmox defaults to configdrive2 only when ostype is a Windows
+# version, and packer leaves ostype as "other" on the built template, so set it
+# explicitly rather than relying on the default surviving.
+qm set "$VMID" --citype configdrive2 >/dev/null
 
 LV="/dev/${STORAGE//-//}"                       # local-lvm -> /dev/local/lvm (wrong)
 LV="/dev/pve/$(basename "${DISK#*:}")"          # local-lvm:vm-9422-disk-0 -> /dev/pve/vm-9422-disk-0

@@ -94,6 +94,12 @@ source "proxmox-clone" "windows_cloud" {
 
   qemu_agent = true
 
+  // NOTE: cloud_init is NOT set here. proxmox-clone drops the base's inherited
+  // cloud-init CD on clone, and setting cloud_init=true here conflicted with
+  // that inherited drive and produced a template with no ide2 at all. The
+  // finalize post-processor (switch-template-to-virtio.py) adds and verifies
+  // the drive instead, so there is a single owner of it.
+
   // Disks, firmware and NIC are inherited from the base template. They are not
   // redeclared here: proxmox-clone takes the source VM's hardware, and the base
   // deliberately differs per release (2022 is MBR/SeaBIOS, 2025 is GPT/OVMF).
@@ -108,6 +114,7 @@ source "proxmox-clone" "windows_cloud" {
       "/scripts/01-install-qemu-ga.ps1"             = file("${path.root}/../common/scripts/01-install-qemu-ga.ps1")
       "/scripts/03-install-virtio-guest-tools.ps1"  = file("${path.root}/../common/scripts/03-install-virtio-guest-tools.ps1")
       "/scripts/02-enable-winrm.ps1"                = file("${path.root}/../common/scripts/02-enable-winrm.ps1")
+      "/root_ca_bundle.pem"                          = file("${path.root}/../common/files/root_ca_bundle.pem")
     }
     cd_label         = local.cd_label
     iso_storage_pool = local.iso_storage_pool
@@ -156,6 +163,7 @@ build {
       // 03-install-virtio-guest-tools runs in bootstrap (pre-WinRM), not here:
       // the guest agent needs its virtio-serial driver before Packer can find
       // the VM at all. By this point the drivers are already installed.
+      "${path.root}/../common/scripts/05-install-lab-ca.ps1",
       "${path.root}/../common/scripts/10-enable-rdp.ps1",
       "${path.root}/../common/scripts/12-enable-openssh.ps1",
       "${path.root}/../common/scripts/30-ConfigureRemotingForAnsible.ps1",
@@ -204,7 +212,9 @@ build {
       "PROXMOX_PASSWORD=${local.proxmox_password}",
       "PROXMOX_NODE=${local.proxmox_node}",
       "PROXMOX_VM_ID=${var.vm_id}",
+      "PROXMOX_STORAGE=${local.storage_pool}",
       "SWITCH_TO_VIRTIO=${var.switch_to_virtio}",
+      "WINDOWS_OSTYPE=${var.windows_ostype}",
     ]
     command = "${path.root}/../common/scripts/switch-template-to-virtio.py"
   }

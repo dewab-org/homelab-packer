@@ -82,6 +82,15 @@
   failed_when: false
   when: not satellite_configured
 
+# Both unregister tasks tolerate failure (the box may never have registered),
+# which also swallows a real failure — and a still-registered template hands
+# every clone the same RHSM identity. Verify the effect, not the module.
+- name: Verify RHSM identity is gone
+  ansible.builtin.command: subscription-manager identity
+  register: rhsm_identity
+  changed_when: false
+  failed_when: rhsm_identity.rc == 0
+
 - name: Remove unused packages
   ansible.builtin.dnf:
     autoremove: true

@@ -200,3 +200,11 @@ variable "clone_task_timeout" {
   type    = string
   default = "20m"
 }
+
+// Proxmox ostype for the finished template. win10 covers 2016/2019/2022;
+// win11 is correct for 2025. Packer leaves it as "other", which suppresses the
+// configdrive2 citype default that Cloudbase-Init depends on.
+variable "windows_ostype" {
+  type    = string
+  default = "win10"
+}

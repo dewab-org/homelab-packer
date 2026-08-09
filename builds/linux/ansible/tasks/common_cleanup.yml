@@ -94,13 +94,31 @@
     dest: /var/lib/dbus/machine-id
     state: link
 
-- name: Clear cloud-init instance IDs
-  ansible.builtin.file:
-    path: "{{ item }}"
-    state: absent
-  loop:
-    - /var/lib/cloud/instance-id
-    - /var/lib/cloud/instance-id.old
+# Re-arm cloud-init so every clone treats its first boot as first boot.
+#
+# This task previously deleted /var/lib/cloud/instance-id and
+# /var/lib/cloud/instance-id.old — paths cloud-init has NEVER used (the real
+# state lives in /var/lib/cloud/data/, instances/, sem/ and seed/). It ran
+# green on every build while doing nothing, and the template shipped with the
+# build's instance-id cached in /var/lib/cloud/data/instance-id. Because
+# Proxmox derives the clone's NoCloud instance-id the same way it did during
+# the build, cloud-init saw "previous iid == current iid" on the clone's first
+# boot and SKIPPED every per-instance module: no user, no password, no
+# hostname. Proven with a linked clone of rhel-9-cloud: ciuser was never
+# created and the clone kept the build VM's hostname.
+#
+# `cloud-init clean` is the canonical re-arm: it empties /var/lib/cloud
+# (including the seed/ dir, which can shadow the Proxmox drive) and, with
+# --logs, removes the build's logs so a clone's first boot is debuggable.
+- name: Re-arm cloud-init (clean state, seed and logs)
+  ansible.builtin.command: cloud-init clean --logs --seed
+  changed_when: true
+
+- name: Verify cloud-init state is actually gone   # trust nothing
+  ansible.builtin.stat:
+    path: /var/lib/cloud/data/instance-id
+  register: ci_instance_id
+  failed_when: ci_instance_id.stat.exists
 
 - name: Remove persistent net rules
   ansible.builtin.file:
