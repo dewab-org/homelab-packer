@@ -94,6 +94,9 @@ source "proxmox-clone" "windows_cloud" {
 
   qemu_agent = true
 
+  # Serial device so every template carries VGA (default) + a serial console.
+  serials = ["socket"]
+
   // NOTE: cloud_init is NOT set here. proxmox-clone drops the base's inherited
   // cloud-init CD on clone, and setting cloud_init=true here conflicted with
   // that inherited drive and produced a template with no ide2 at all. The
@@ -109,12 +112,12 @@ source "proxmox-clone" "windows_cloud" {
   // unattend invokes bootstrap.cmd from this CD at first logon.
   additional_iso_files {
     cd_content = {
-      "/bootstrap.cmd"                              = file("${path.root}/../common/files/bootstrap.cmd")
-      "/bootstrap.ps1"                              = file("${path.root}/../common/files/bootstrap-vhd.ps1")
-      "/scripts/01-install-qemu-ga.ps1"             = file("${path.root}/../common/scripts/01-install-qemu-ga.ps1")
-      "/scripts/03-install-virtio-guest-tools.ps1"  = file("${path.root}/../common/scripts/03-install-virtio-guest-tools.ps1")
-      "/scripts/02-enable-winrm.ps1"                = file("${path.root}/../common/scripts/02-enable-winrm.ps1")
-      "/root_ca_bundle.pem"                          = file("${path.root}/../common/files/root_ca_bundle.pem")
+      "/bootstrap.cmd"                             = file("${path.root}/../common/files/bootstrap.cmd")
+      "/bootstrap.ps1"                             = file("${path.root}/../common/files/bootstrap-vhd.ps1")
+      "/scripts/01-install-qemu-ga.ps1"            = file("${path.root}/../common/scripts/01-install-qemu-ga.ps1")
+      "/scripts/03-install-virtio-guest-tools.ps1" = file("${path.root}/../common/scripts/03-install-virtio-guest-tools.ps1")
+      "/scripts/02-enable-winrm.ps1"               = file("${path.root}/../common/scripts/02-enable-winrm.ps1")
+      "/root_ca_bundle.pem"                        = file("${path.root}/../common/files/root_ca_bundle.pem")
     }
     cd_label         = local.cd_label
     iso_storage_pool = local.iso_storage_pool

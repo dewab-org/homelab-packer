@@ -318,6 +318,57 @@ def base_status(clone_vm_id: str, target_size: str) -> int:
     return 4
 
 
+def _wait_proxmox_task(prox, node: str, upid, timeout: int = 300) -> None:
+    """Poll a Proxmox task UPID until it stops (best-effort)."""
+    if not upid:
+        return
+    end = time.time() + timeout
+    while time.time() < end:
+        try:
+            status = prox.nodes(node).tasks(upid).status.get()
+        except Exception:
+            return
+        if status.get("status") == "stopped":
+            return
+        time.sleep(2)
+
+
+def purge_stranded_build_vm(build_vars: Path) -> None:
+    """Remove a non-template VM squatting on the output VMID before building.
+
+    A cancelled or hard-crashed build can leave a plain VM at the target vm_id.
+    packer's -force will not clobber a non-template VM, so every later build
+    dies with "found matching VM ... but it is not a template". Destroy that
+    stranded VM so the build self-heals. A real *template* on the VMID is left
+    alone — packer/--overwrite replaces that itself. No-op without Proxmox creds
+    (packer then surfaces the clear error, same as before).
+    """
+    vm_id = parse_vm_id(build_vars)
+    if not vm_id:
+        return
+    prox = proxmox_client()
+    if prox is None:
+        return
+    try:
+        resources = prox.cluster.resources.get(type="vm")
+    except Exception:
+        return
+    entry = next((e for e in resources if str(e.get("vmid")) == vm_id), None)
+    if entry is None:
+        return
+    if int(entry.get("template", 0) or 0) == 1:
+        return  # a real template — leave it for packer/-force to replace
+    node = entry.get("node")
+    print(f"purging stranded non-template VM {vm_id} on {node} (would block the clone build)")
+    try:
+        if entry.get("status") == "running":
+            _wait_proxmox_task(prox, node, prox.nodes(node).qemu(vm_id).status.stop.post())
+        _wait_proxmox_task(prox, node, prox.nodes(node).qemu(vm_id).delete(purge=1))
+        print(f"  purged {vm_id}")
+    except Exception as exc:
+        print(f"  WARNING: could not purge {vm_id}: {exc}", file=sys.stderr)
+
+
 def build_packer_args(
     build_dir: Path,
     common_vars: Path,
@@ -424,6 +475,9 @@ def run_build(build_dir: Path, common_vars: Path, args: argparse.Namespace) -> i
                 f"(waited {RETRY_DELAY_SECONDS}s) =====",
                 flush=True,
             )
+        # Clear any non-template VM stranded on the output VMID (e.g. by a
+        # cancelled build) — packer's -force cannot replace a plain VM.
+        purge_stranded_build_vm(build_vars)
         status = run_packer(
             build_dir, common_vars, args, force_overwrite=(attempt > 1)
         )

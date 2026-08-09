@@ -247,8 +247,14 @@ def create_base_template(prox: ProxmoxAPI, args: argparse.Namespace, import_voli
         "agent": "enabled=1,fstrim_cloned_disks=1",
         "hotplug": "network,disk,cpu,memory,usb",
         "numa": 1,
+        # Both consoles on every template: a VGA display (clean web console) and
+        # a serial device (headless / cloud-init logging). vga=serial0 made the
+        # serial line the ONLY display, so the Proxmox web console showed the
+        # raw serial stream — systemd's decorated output renders as C1/"PAD"
+        # glyph boxes there. std VGA + serial socket gives a clean default
+        # console and keeps serial available; clones inherit both.
         "serial0": "socket",
-        "vga": "serial0",
+        "vga": "std",
         "net0": f"virtio,bridge={args.bridge},tag={args.vlan_tag}",
         "efidisk0": f"{args.target_storage}:1,efitype=4m,pre-enrolled-keys=1",
         "scsi0": f"{args.target_storage}:0,import-from={import_volid},discard=on,ssd=1",
