@@ -1,0 +1,163 @@
+name: _build-test-template
+
+# Reusable build->test pipeline for ONE template. Called by the per-template
+# workflows (template-*.yml), each of which carries its own status badge. The
+# heavy toolchain setup lives here once so the callers stay a few lines.
+#
+# Flow: ensure the clone-source base exists (self-heal a deleted base) ->
+# build the single template (build.py retries + verifies it landed) ->
+# clone-verify it (clone, cloud-init, remote login, CA, then destroy).
+#
+# All callers share the `packer-target-environment` concurrency group (set in
+# the caller, top-level) so no two ever touch the single Proxmox target at
+# once. cancel-in-progress is false there: killing a build strands a half-made
+# VM at its VMID.
+
+on:
+  workflow_call:
+    inputs:
+      build_dir:
+        description: "Single build directory, e.g. builds/linux/rhel/10-cloud"
+        required: true
+        type: string
+      base_bootstrap_cmd:
+        description: >-
+          Command that (re)creates this template's clone-source base. Run only
+          when the base is missing. Empty to skip (Windows bases are imported
+          out-of-band from a vendor VHDX).
+        required: false
+        default: ""
+        type: string
+      build_mode:
+        description: "overwrite | skip | default"
+        required: false
+        default: overwrite
+        type: string
+
+permissions:
+  contents: read
+
+jobs:
+  build-test:
+    name: build + clone-test
+    runs-on: arc-runners
+    timeout-minutes: 300
+    env:
+      VAULT_ADDR: ${{ vars.VAULT_ADDR }}
+      VAULT_TOKEN: ${{ secrets.VAULT_TOKEN }}
+      VAULT_CACERT: /tmp/vault-ca.pem
+      PACKER_LOG: "1"
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Set up Packer
+        uses: hashicorp/setup-packer@main
+        with:
+          version: "1.15.1"
+
+      - name: Install runner dependencies
+        shell: bash
+        run: |
+          set -euo pipefail
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends ca-certificates sshpass xorriso openssh-client unzip
+          vault_version="1.19.5"
+          curl -fsSLo /tmp/vault.zip "https://releases.hashicorp.com/vault/${vault_version}/vault_${vault_version}_linux_amd64.zip"
+          sudo unzip -o /tmp/vault.zip vault -d /usr/local/bin
+          sudo chmod 0755 /usr/local/bin/vault
+
+      - name: Write Vault CA certificate
+        shell: bash
+        run: |
+          set -euo pipefail
+          printf '%s' "${{ secrets.VAULT_CACERT }}" > /tmp/vault-ca.pem
+          sudo install -m 0644 /tmp/vault-ca.pem /usr/local/share/ca-certificates/vault-viking-org.crt
+          sudo update-ca-certificates
+
+      - name: Install build dependencies
+        shell: bash
+        run: |
+          set -euo pipefail
+          python -m venv .venv
+          . .venv/bin/activate
+          python -m pip install --upgrade pip
+          python -m pip install -r requirements.txt
+          ansible-galaxy collection install -r requirements.yml
+
+      - name: Export Proxmox connection from Vault
+        shell: bash
+        run: |
+          set -euo pipefail
+          # Same secret packer's vault() reads at build time. Needed here for the
+          # base existence check, build.py's post-build verify, and clone-verify.
+          for k in PROXMOX_URL PROXMOX_USERNAME PROXMOX_PASSWORD PROXMOX_NODE PROXMOX_STORAGE; do
+            v="$(vault kv get -field="$k" secret/packer)"
+            echo "::add-mask::$v"
+            echo "$k=$v" >> "$GITHUB_ENV"
+          done
+
+      - name: Ensure clone-source base exists
+        shell: bash
+        run: |
+          set -euo pipefail
+          . .venv/bin/activate
+          dir="${{ inputs.build_dir }}"
+          cmd="${{ inputs.base_bootstrap_cmd }}"
+          if [ -z "$cmd" ]; then
+            echo "no base_bootstrap_cmd given; assuming base is present (Windows/manual base)"
+            exit 0
+          fi
+          clone_id="$(grep -oE '^[[:space:]]*clone_vm_id[[:space:]]*=[[:space:]]*[0-9]+' \
+            "$dir/variables.auto.pkrvars.hcl" | grep -oE '[0-9]+' | head -1)"
+          if [ -z "$clone_id" ]; then
+            echo "could not find clone_vm_id in $dir/variables.auto.pkrvars.hcl" >&2
+            exit 1
+          fi
+          if python -c "import build,sys; p=build.proxmox_client(); \
+            sys.exit(0 if p and any(str(e.get('vmid'))=='$clone_id' for e in p.cluster.resources.get(type='vm')) else 3)"; then
+            echo "clone-source base $clone_id present; skipping bootstrap"
+          else
+            echo "clone-source base $clone_id MISSING; bootstrapping it"
+            eval "$cmd"
+          fi
+
+      - name: Initialize packer plugins
+        shell: bash
+        run: |
+          set -euo pipefail
+          . .venv/bin/activate
+          ./build.py --init-only "${{ inputs.build_dir }}"
+
+      - name: Build template
+        shell: bash
+        run: |
+          set -euo pipefail
+          . .venv/bin/activate
+          arg=""
+          case "${{ inputs.build_mode }}" in
+            overwrite) arg="--overwrite" ;;
+            skip)      arg="--skip" ;;
+            default)   arg="" ;;
+            *) echo "unsupported build_mode: ${{ inputs.build_mode }}" >&2; exit 1 ;;
+          esac
+          ./build.py $arg "${{ inputs.build_dir }}"
+
+      - name: Clone-verify template
+        shell: bash
+        run: |
+          set -euo pipefail
+          . .venv/bin/activate
+          vmid="$(python -c "import build,pathlib; print(build.parse_vm_id(pathlib.Path('${{ inputs.build_dir }}/variables.auto.pkrvars.hcl')))")"
+          if [ -z "$vmid" ]; then
+            echo "could not resolve output vm_id for ${{ inputs.build_dir }}" >&2
+            exit 1
+          fi
+          echo "clone-verifying template $vmid"
+          # Destroys every clone it makes (try/finally), including on failure.
+          python tests/clone-verify.py "$vmid"

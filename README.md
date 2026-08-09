@@ -7,6 +7,30 @@
 
 Packer templates for building Proxmox VM templates across Linux families, plus in-progress Windows templates.
 
+## Per-template build → test pipelines
+
+Each cloud template has its own pipeline (`template-*.yml`) that builds **and**
+clone-tests just that one template — so a single template's failure (or fix) is
+isolated and visible on its own badge instead of buried in one big job. Each
+delegates to the reusable [`_build-test-template.yml`](.github/workflows/_build-test-template.yml),
+which self-heals a missing clone-source base, builds (with retries + a
+template-exists check), then clone-verifies. They all serialize on one
+concurrency group (a single Proxmox target). The top-of-file `build-templates`
+badge is the weekly "rebuild everything" orchestrator (schedule + manual);
+`verify-templates` clone-tests the whole set after it.
+
+| Template | Build → test |
+| --- | --- |
+| RHEL 8 cloud | [![template-rhel-8-cloud](https://github.com/dewab/homelab-packer/actions/workflows/template-rhel-8-cloud.yml/badge.svg)](https://github.com/dewab/homelab-packer/actions/workflows/template-rhel-8-cloud.yml) |
+| RHEL 9 cloud | [![template-rhel-9-cloud](https://github.com/dewab/homelab-packer/actions/workflows/template-rhel-9-cloud.yml/badge.svg)](https://github.com/dewab/homelab-packer/actions/workflows/template-rhel-9-cloud.yml) |
+| RHEL 10 cloud | [![template-rhel-10-cloud](https://github.com/dewab/homelab-packer/actions/workflows/template-rhel-10-cloud.yml/badge.svg)](https://github.com/dewab/homelab-packer/actions/workflows/template-rhel-10-cloud.yml) |
+| Rocky 8 cloud | [![template-rocky-8-cloud](https://github.com/dewab/homelab-packer/actions/workflows/template-rocky-8-cloud.yml/badge.svg)](https://github.com/dewab/homelab-packer/actions/workflows/template-rocky-8-cloud.yml) |
+| Rocky 9 cloud | [![template-rocky-9-cloud](https://github.com/dewab/homelab-packer/actions/workflows/template-rocky-9-cloud.yml/badge.svg)](https://github.com/dewab/homelab-packer/actions/workflows/template-rocky-9-cloud.yml) |
+| Rocky 10 cloud | [![template-rocky-10-cloud](https://github.com/dewab/homelab-packer/actions/workflows/template-rocky-10-cloud.yml/badge.svg)](https://github.com/dewab/homelab-packer/actions/workflows/template-rocky-10-cloud.yml) |
+| Ubuntu 24.04 cloud | [![template-ubuntu-24.04-cloud](https://github.com/dewab/homelab-packer/actions/workflows/template-ubuntu-24.04-cloud.yml/badge.svg)](https://github.com/dewab/homelab-packer/actions/workflows/template-ubuntu-24.04-cloud.yml) |
+| Windows Server 2022 cloud | [![template-windows-2022-cloud](https://github.com/dewab/homelab-packer/actions/workflows/template-windows-2022-cloud.yml/badge.svg)](https://github.com/dewab/homelab-packer/actions/workflows/template-windows-2022-cloud.yml) |
+| Windows Server 2025 cloud | [![template-windows-2025-cloud](https://github.com/dewab/homelab-packer/actions/workflows/template-windows-2025-cloud.yml/badge.svg)](https://github.com/dewab/homelab-packer/actions/workflows/template-windows-2025-cloud.yml) |
+
 ## Layout
 
 - `builds/linux/rhel/{8,9,10}`: RHEL ISO/kickstart builds with RHN registration and Cloud-Init.

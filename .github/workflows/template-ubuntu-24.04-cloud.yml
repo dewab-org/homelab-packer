@@ -1,0 +1,47 @@
+name: template-ubuntu-24.04-cloud
+
+# Per-template build->test pipeline. Delegates to the reusable
+# _build-test-template.yml so this file stays a thin, badge-bearing entry point.
+# Triggers on changes to just this template (plus shared inputs) and on demand.
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - "builds/linux/ubuntu/24.04-cloud/**"
+      - "builds/linux/ansible/**"
+      - "builds/linux/common/**"
+      - "build.py"
+      - "tests/clone-verify.py"
+      - ".github/workflows/_build-test-template.yml"
+      - ".github/workflows/template-ubuntu-24.04-cloud.yml"
+  workflow_dispatch:
+    inputs:
+      build_mode:
+        description: "How to handle an existing template/VMID"
+        required: false
+        default: overwrite
+        type: choice
+        options:
+          - overwrite
+          - skip
+          - default
+
+permissions:
+  contents: read
+
+# Serialize against every other template pipeline, the weekly build-templates,
+# and verify-templates: one Proxmox target, shared VMID ranges. Never cancel a
+# running build (it would strand a half-built VM at its VMID).
+concurrency:
+  group: packer-target-environment
+  cancel-in-progress: false
+
+jobs:
+  build-test:
+    uses: ./.github/workflows/_build-test-template.yml
+    with:
+      build_dir: builds/linux/ubuntu/24.04-cloud
+      base_bootstrap_cmd: "python builds/linux/common/scripts/bootstrap-base-template.py"
+      build_mode: ${{ inputs.build_mode || 'overwrite' }}
+    secrets: inherit

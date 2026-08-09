@@ -1,0 +1,5 @@
+# arc-runners is our self-hosted Actions Runner Controller pool. Declaring it
+# stops actionlint flagging every `runs-on: arc-runners` as an unknown label.
+self-hosted-runner:
+  labels:
+    - arc-runners

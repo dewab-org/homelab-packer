@@ -1,41 +1,12 @@
 name: build-templates
 
+# NO push trigger. Per-template pushes are handled by the template-*.yml
+# workflows (each builds+tests just the changed template and carries its own
+# badge). This workflow is the "rebuild everything" orchestrator: the weekly
+# schedule and the manual button. That keeps a one-line edit from kicking off a
+# full multi-hour, all-target rebuild, and keeps each template's status legible
+# on its own badge instead of hidden inside one big job.
 on:
-  push:
-    branches:
-      - main
-    # Only rebuild when something that actually changes a template changes.
-    # This was previously a bare `push:`, so a docs-only commit kicked off a
-    # full ~2h 14-target rebuild — and the concurrency cancel that followed
-    # stranded a half-built VM at its VMID, which then failed the next run
-    # with "found matching VM but it is not a template".
-    paths:
-      - "builds/**"
-      - "!builds/**/*.md"
-      - "build.py"
-      - "ansible.cfg"
-      - "requirements.txt"
-      - "requirements.yml"
-      - "variables.auto.pkrvars.hcl"
-      # A push build runs build.py's default target, which is cloud-only, so
-      # editing an ISO-only build directory must not trigger it — it would
-      # rebuild seven cloud templates and not the thing that changed. The
-      # -cloud siblings are separate path segments and stay matched by
-      # "builds/**" above. Shared inputs (builds/linux/ansible,
-      # builds/linux/common) still trigger, correctly: they affect both
-      # flavours. Rebuild ISO templates with workflow_dispatch
-      # (build_target=iso).
-      - "!builds/linux/rhel/8/**"
-      - "!builds/linux/rhel/9/**"
-      - "!builds/linux/rhel/10/**"
-      - "!builds/linux/rocky/8/**"
-      - "!builds/linux/rocky/9/**"
-      - "!builds/linux/rocky/10/**"
-      - "!builds/linux/ubuntu/24.04/**"
-      # Deliberately NOT self-triggering on this workflow file: editing the
-      # pipeline does not change template contents. Validate workflow edits
-      # with workflow_dispatch, or let the Sunday schedule pick them up.
-      # (dhcp's publish-images.yml does self-trigger — those builds are ~40s.)
   schedule:
     # Weekly template rebuild: Sundays 14:00 UTC (09:00 CDT). Clear of the
     # nightly job band (02:00-12:00 UTC) and the Sunday HA-upgrade (10:00) /

@@ -183,7 +183,12 @@ def parse_template_name(build_file: Path) -> str:
 def parse_vm_id(build_vars: Path) -> str:
     if not build_vars.exists():
         return ""
-    match = re.search(r"vm_id\s*=\s*([0-9]+)", build_vars.read_text())
+    # Anchor to line start: the cloud pkrvars also carry `clone_vm_id = <base>`
+    # (the clone SOURCE), and an unanchored `vm_id\s*=` matches *that* first,
+    # so template_exists()/verify_template_built() would check the base VMID
+    # (which always exists) instead of the output template. Match only a line
+    # whose key is exactly `vm_id`.
+    match = re.search(r"^\s*vm_id\s*=\s*([0-9]+)", build_vars.read_text(), re.MULTILINE)
     return match.group(1) if match else ""
 
 
