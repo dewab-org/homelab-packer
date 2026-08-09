@@ -136,12 +136,37 @@ def ssh(ip, key_path, user, cmd, timeout=25):
     return r.returncode, (r.stdout + r.stderr).strip()
 
 
+def wait_ssh(ip, key_path, user, timeout=300, interval=5):
+    """Poll SSH until login succeeds, or return the last error at the deadline.
+
+    A freshly-cloned cloud image answers the guest agent (network is up) well
+    before cloud-init has created the user and started sshd, so the first
+    connect routinely gets 'Connection refused'. Waiting for the agent + a fixed
+    sleep is not enough — retry the actual login until sshd accepts it. Returns
+    (True, "") on success or (False, last_error) on timeout.
+    """
+    end = time.time() + timeout
+    last = "no attempt made"
+    while time.time() < end:
+        rc, out = ssh(ip, key_path, user, "echo ok")
+        if rc == 0 and "ok" in out:
+            return True, ""
+        last = f"rc={rc}: {out[:120]}"
+        time.sleep(interval)
+    return False, last
+
+
 # --------------------------------------------------------------------------- #
 # per-OS verification
 # --------------------------------------------------------------------------- #
 
 def verify_linux(prox, node, vm_id, clone_name, ip, key_path):
     fails = []
+
+    ready, why = wait_ssh(ip, key_path, CIUSER)
+    if not ready:
+        fails.append(f"SSH login as {CIUSER} never came up within timeout ({why})")
+        return fails                       # nothing else works without login
 
     rc, out = ssh(ip, key_path, CIUSER, "echo ok; hostname; id -un")
     if rc != 0 or "ok" not in out:
