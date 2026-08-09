@@ -185,9 +185,22 @@ def verify_linux(prox, node, vm_id, clone_name, ip, key_path):
     else:
         log("    sudo OK")
 
-    rc, out = ssh(ip, key_path, CIUSER,
-                  "trust list 2>/dev/null | grep -qi 'HomeLab' && echo CA_OK || "
-                  "grep -rqi 'HomeLab' /etc/pki/ca-trust/source/anchors/ 2>/dev/null && echo CA_OK || echo CA_MISSING")
+    # Cross-distro CA check. The trust anchors live in different places
+    # (RHEL: /etc/pki/ca-trust/source/anchors; Debian/Ubuntu:
+    # /usr/local/share/ca-certificates), and `trust list` (p11-kit) is not on a
+    # stock Ubuntu cloud image — so the old RHEL-only check false-failed on
+    # Ubuntu even though the CA is baked in at build. Decode each anchor with
+    # openssl (present on both) and match the CA subject; fall back to trust.
+    ca_check = (
+        "for d in /usr/local/share/ca-certificates /etc/pki/ca-trust/source/anchors; do "
+        "[ -d \"$d\" ] || continue; "
+        "for f in \"$d\"/*.crt \"$d\"/*.pem; do [ -e \"$f\" ] || continue; "
+        "openssl x509 -in \"$f\" -noout -subject 2>/dev/null | grep -qi homelab "
+        "&& { echo CA_OK; exit 0; }; done; done; "
+        "command -v trust >/dev/null 2>&1 && trust list 2>/dev/null | grep -qi homelab "
+        "&& { echo CA_OK; exit 0; }; echo CA_MISSING"
+    )
+    rc, out = ssh(ip, key_path, CIUSER, ca_check)
     if "CA_OK" not in out:
         fails.append("homelab CA not found in the trust store")
     else:
