@@ -110,6 +110,15 @@ build (shared concurrency group + the 9600+ clone VMID range).
 - Use `./build.py --skip` to skip builds when a matching template (or VMID) already exists in Proxmox.
 - Use `./build.py --init-only` to run `packer init` only.
 - Use `./build.py --validate-only` to run `packer init` and `packer validate` without starting a Proxmox build.
+- Builds retry automatically: `./build.py` retries a failed build up to 2 times
+  by default (`--retries N`, `--retries 0` to disable), with a 30s pause. A
+  retry also fires when packer exits 0 but no template is found — because exit 0
+  is a claim, not proof. Retries force-overwrite whatever a failed attempt left
+  behind. `--ask` disables the loop (it hands control to packer's on-error
+  prompt). Fine-grained retries also wrap the flaky RHEL network steps (RHN /
+  Satellite registration, cert download, `dnf`) inside Ansible.
+- Use `./build.py --no-verify` to skip the post-build Proxmox check (the check
+  needs `PROXMOX_*` set; without them it warns and trusts packer's exit code).
 - VMID mapping (cloud-base = ISO VMID +20, cloud template = ISO VMID +30):
   - RHEL 8/9/10 ISO: 9108/9109/9110; cloud-base: 9128/9129/9130; cloud: 9138/9139/9140
   - Rocky 8/9/10 ISO: 9208/9209/9210; cloud-base: 9228/9229/9230; cloud: 9238/9239/9240

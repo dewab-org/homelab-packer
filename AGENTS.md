@@ -3,7 +3,7 @@
 - Project: Packer templates for Proxmox VM templates (Linux families and Windows stubs).
 - Entry points: `builds/linux/rhel/10/build.pkr.hcl` and sibling release directories.
 - Conventions: Keep files ASCII; prefer explicit variables over hard-coded values.
-- Usage: `./build.py builds/linux/rhel/10` (add `--ask`, `--overwrite`, or `--skip` as needed).
+- Usage: `./build.py builds/linux/rhel/10` (add `--ask`, `--overwrite`, `--skip`, `--retries N`, or `--no-verify` as needed). Builds retry twice by default and verify the template exists in Proxmox after packer exits 0.
 - Use a single top-level `ca` directory for all CA certs.
 - All Linux distros should install python3 as part of the base image (not as a separate provisioner step).
 - Windows templates should use `autounattend.xml` for unattended installation.

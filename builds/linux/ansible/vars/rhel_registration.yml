@@ -13,3 +13,8 @@ satellite_certificate_configured: "{{ (satellite_certificate_url | length) > 0 }
 registration_nameservers:
   - 192.168.1.10
   - 192.168.1.11
+# Network steps (RHN/Satellite registration, cert download, dnf metadata and
+# package pulls) fail transiently far more often than they fail for real. Retry
+# them before giving up so one flaky RHN round-trip does not kill a whole build.
+rhel_net_retries: 5
+rhel_net_delay: 20

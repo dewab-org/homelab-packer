@@ -59,6 +59,10 @@
         name: "{{ cloud_base_packages + (['python39'] if ansible_distribution_major_version == '8' else []) }}"
         state: present
         update_cache: true
+      register: cloud_base_pkgs
+      until: cloud_base_pkgs is succeeded
+      retries: "{{ rhel_net_retries }}"
+      delay: "{{ rhel_net_delay }}"
 
     # EL8's OpenSSH has no sshd_config.d include support — edit the main
     # config there (same approach as the rhel8 kickstart %post sed), and use

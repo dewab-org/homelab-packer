@@ -16,6 +16,7 @@ import signal
 import shutil
 import subprocess
 import tempfile
+import time
 from typing import TYPE_CHECKING
 from urllib.parse import urlparse
 
@@ -25,6 +26,10 @@ if TYPE_CHECKING:
 
 BUILD_BLOCK_RE = re.compile(r"^\s*build\s*{", re.MULTILINE)
 
+# Pause between whole-build retries: long enough for a transient RHN/Satellite
+# or Proxmox API blip to clear, short enough not to stall an overnight run.
+RETRY_DELAY_SECONDS = 30
+
 
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(
@@ -32,6 +37,20 @@ def parse_args() -> argparse.Namespace:
         usage="%(prog)s [--ask] [--overwrite] [--skip] [--init-only|--validate-only] [all|<build-dir>]",
     )
     parser.add_argument("--ask", action="store_true", help="ask on Packer errors")
+    parser.add_argument(
+        "--retries",
+        type=int,
+        default=2,
+        metavar="N",
+        help="retry a failed packer build up to N times (default 2; 0 disables). "
+        "Retries also fire when packer exits 0 but the template is not found in "
+        "Proxmox. Ignored with --ask/--init-only/--validate-only.",
+    )
+    parser.add_argument(
+        "--no-verify",
+        action="store_true",
+        help="skip the post-build check that the template exists in Proxmox",
+    )
     exclusive = parser.add_mutually_exclusive_group()
     exclusive.add_argument(
         "--overwrite", action="store_true", help="overwrite existing template/VMID"
@@ -233,6 +252,36 @@ def template_exists(build_dir: Path, build_vars: Path) -> bool | None:
     return False
 
 
+def verify_template_built(build_dir: Path, build_vars: Path) -> bool | None:
+    """Confirm the build actually produced a Proxmox *template*.
+
+    packer exiting 0 is not proof: a botched finalize step can leave exit 0
+    with no template, or a plain VM that never got converted. Match on VMID
+    (preferred) or name and require the template flag to be set.
+
+    Returns True/False, or None when Proxmox cannot be queried (no creds) so
+    the caller can warn rather than silently trust the exit code.
+    """
+    template_name = parse_template_name(build_dir / "build.pkr.hcl")
+    vm_id = parse_vm_id(build_vars)
+
+    proxmox = proxmox_client()
+    if proxmox is None:
+        return None
+
+    try:
+        resources = proxmox.cluster.resources.get(type="vm")
+    except Exception:
+        return None
+
+    for entry in resources:
+        matches_id = bool(vm_id) and str(entry.get("vmid")) == vm_id
+        matches_name = bool(template_name) and entry.get("name") == template_name
+        if (matches_id or matches_name) and int(entry.get("template", 0) or 0) == 1:
+            return True
+    return False
+
+
 def build_packer_args(
     build_dir: Path,
     common_vars: Path,
@@ -279,14 +328,23 @@ def run_packer_validate(build_dir: Path, common_vars: Path) -> int:
         shutil.rmtree(ssh_key_tmpdir, ignore_errors=True)
 
 
-def run_packer(build_dir: Path, common_vars: Path, args: argparse.Namespace) -> int:
+def run_packer(
+    build_dir: Path,
+    common_vars: Path,
+    args: argparse.Namespace,
+    force_overwrite: bool = False,
+) -> int:
     build_vars = build_dir / "variables.auto.pkrvars.hcl"
     ssh_private_key_file, ssh_public_key_build, ssh_key_tmpdir = generate_build_ssh_keypair()
     try:
         packer_args = ["packer", "build"]
         if args.ask:
             packer_args.append("-on-error=ask")
-        if args.overwrite:
+        # Retries must overwrite whatever a failed attempt left behind (a
+        # half-built VM or an already-created template on the target VMID),
+        # otherwise the retry fails on a name/VMID clash instead of the
+        # original transient error.
+        if args.overwrite or force_overwrite:
             packer_args.append("-force")
         packer_args.extend(build_packer_args(build_dir, common_vars, build_vars, ssh_private_key_file, ssh_public_key_build))
         return run_command(packer_args)
@@ -303,8 +361,10 @@ def run_build(build_dir: Path, common_vars: Path, args: argparse.Namespace) -> i
         print(f"Missing common vars: {common_vars}", file=sys.stderr)
         return 1
 
+    build_vars = build_dir / "variables.auto.pkrvars.hcl"
+
     if args.skip:
-        exists = template_exists(build_dir, build_dir / "variables.auto.pkrvars.hcl")
+        exists = template_exists(build_dir, build_vars)
         if exists is True:
             rel = build_dir.relative_to(repo_root())
             print(f"Skipping {rel} (template already exists)")
@@ -316,7 +376,55 @@ def run_build(build_dir: Path, common_vars: Path, args: argparse.Namespace) -> i
                 file=sys.stderr,
             )
 
-    return run_packer(build_dir, common_vars, args)
+    # --ask hands control to packer's interactive on-error prompt, so an
+    # unattended retry loop would fight it; run exactly once in that mode.
+    attempts = 1 if args.ask else 1 + max(0, args.retries)
+    rel = build_dir.relative_to(repo_root())
+
+    for attempt in range(1, attempts + 1):
+        if attempt > 1:
+            print(
+                f"===== RETRY {attempt - 1}/{attempts - 1} for {rel} "
+                f"(waited {RETRY_DELAY_SECONDS}s) =====",
+                flush=True,
+            )
+        status = run_packer(
+            build_dir, common_vars, args, force_overwrite=(attempt > 1)
+        )
+
+        if status != 0:
+            print(
+                f"packer build exited {status} for {rel} "
+                f"(attempt {attempt}/{attempts})",
+                file=sys.stderr,
+            )
+            if attempt < attempts:
+                time.sleep(RETRY_DELAY_SECONDS)
+            continue
+
+        # Exit 0 is a claim, not proof: confirm the template really exists.
+        if args.no_verify:
+            return 0
+        verified = verify_template_built(build_dir, build_vars)
+        if verified is True:
+            print(f"verified: template for {rel} is present in Proxmox")
+            return 0
+        if verified is None:
+            print(
+                f"WARNING: cannot verify {rel} (no/failed Proxmox query); "
+                "trusting packer exit 0 — set PROXMOX_* to enable verification",
+                file=sys.stderr,
+            )
+            return 0
+        print(
+            f"packer reported success but NO template found for {rel} "
+            f"(attempt {attempt}/{attempts})",
+            file=sys.stderr,
+        )
+        if attempt < attempts:
+            time.sleep(RETRY_DELAY_SECONDS)
+
+    return 1
 
 
 def main() -> int:

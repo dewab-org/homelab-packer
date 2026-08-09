@@ -36,6 +36,10 @@
     dest: /tmp/katello-ca-consumer-latest.noarch.rpm
     mode: "0644"
     validate_certs: false
+  register: satellite_cert_dl
+  until: satellite_cert_dl is succeeded
+  retries: "{{ rhel_net_retries }}"
+  delay: "{{ rhel_net_delay }}"
   when: satellite_certificate_configured
 
 - name: Install Satellite Certificate RPM
@@ -53,6 +57,10 @@
     auto_attach: "{{ satellite_auto_attach | default(omit) }}"
     environment: "{{ satellite_environment }}"
     force_register: true
+  register: satellite_reg
+  until: satellite_reg is succeeded
+  retries: "{{ rhel_net_retries }}"
+  delay: "{{ rhel_net_delay }}"
   no_log: true
   when: satellite_configured
 
@@ -61,12 +69,20 @@
     username: "{{ redhat_username }}"
     password: "{{ redhat_password }}"
     force_register: true
+  register: rhn_reg
+  until: rhn_reg is succeeded
+  retries: "{{ rhel_net_retries }}"
+  delay: "{{ rhel_net_delay }}"
   no_log: true
   when: not satellite_configured
 
 - name: Update DNF metadata
   ansible.builtin.dnf:
     update_cache: true
+  register: rhel_dnf_meta
+  until: rhel_dnf_meta is succeeded
+  retries: "{{ rhel_net_retries }}"
+  delay: "{{ rhel_net_delay }}"
 
 - name: Unregister from Red Hat Satellite
   community.general.redhat_subscription:
