@@ -68,10 +68,13 @@ run_one() {
 
 # 2022 ships a .vhd (MBR, single partition, SeaBIOS);
 # 2025 ships a .vhdx (GPT: ESP + MSR + Windows on p3, OVMF). Not interchangeable.
+# Base images are the Datacenter eval VHD/VHDX, staged in iso_images under the
+# same human names as the lab mirror (build number in the name). If a newer eval
+# base is mirrored, stage it and bump the build number in these two paths.
 [ "$TARGET" = "2022" ] || [ "$TARGET" = "both" ] && \
-  run_one 2022 /mnt/pve/iso_images/template/iso/ws2022-eval.vhd  9422 seabios 1
+  run_one 2022 /mnt/pve/iso_images/template/iso/windows-server-2022-datacenter-eval-x64-en-us-20348.169.vhd  9422 seabios 1
 [ "$TARGET" = "2025" ] || [ "$TARGET" = "both" ] && \
-  run_one 2025 /mnt/pve/iso_images/template/iso/ws2025-eval.vhdx 9424 ovmf    3
+  run_one 2025 /mnt/pve/iso_images/template/iso/windows-server-2025-datacenter-eval-x64-en-us-26100.1742.vhdx 9424 ovmf    3
 
 ssh "$NODE" 'rm -f /tmp/unattend.xml'
 echo "==> done. Build with:"

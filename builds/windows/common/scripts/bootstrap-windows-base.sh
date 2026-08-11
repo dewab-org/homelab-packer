@@ -5,7 +5,7 @@
 # Idempotent-ish: refuses to clobber an existing VMID unless --force.
 #
 #   ./bootstrap-windows-base.sh \
-#       --image /mnt/pve/iso_images/template/iso/ws2022-eval.vhd \
+#       --image /mnt/pve/iso_images/template/iso/windows-server-2022-datacenter-eval-x64-en-us-20348.169.vhd \
 #       --vm-id 9422 --name windows-server-2022-desktop-experience-cloud-base \
 #       --firmware seabios --win-part 1 --unattend /tmp/unattend.xml
 #
