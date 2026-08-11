@@ -29,8 +29,8 @@ on:
 permissions:
   contents: read
 
-# Serialize against every other template pipeline, the weekly build-templates,
-# and verify-templates: one Proxmox target, shared VMID ranges. Never cancel a
+# Serialize against every other template pipeline, the weekly build-templates
+# fan-out: one Proxmox target, shared VMID ranges. Never cancel a
 # running build (it would strand a half-built VM at its VMID).
 concurrency:
   group: packer-target-environment

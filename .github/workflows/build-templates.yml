@@ -1,163 +1,78 @@
 name: build-templates
 
-# NO push trigger. Per-template pushes are handled by the template-*.yml
-# workflows (each builds+tests just the changed template and carries its own
-# badge). This workflow is the "rebuild everything" orchestrator: the weekly
-# schedule and the manual button. That keeps a one-line edit from kicking off a
-# full multi-hour, all-target rebuild, and keeps each template's status legible
-# on its own badge instead of hidden inside one big job.
+# Weekly "rebuild everything" for drift detection — dispatches each CLOUD
+# per-template pipeline (template-*-cloud) serially and waits for each, so every
+# template's own badge reflects the weekly run. They share the
+# packer-target-environment concurrency group and must not overlap, hence the
+# serial dispatch. Runs on a GitHub-hosted runner (NOT arc-runners) so it does
+# not hold a self-hosted runner that the dispatched builds themselves need.
+#
+# ISO builds are by-hand only — their template-*-iso workflows are disabled.
+
 on:
   schedule:
-    # Weekly template rebuild: Sundays 14:00 UTC (09:00 CDT). Clear of the
-    # nightly job band (02:00-12:00 UTC) and the Sunday HA-upgrade (10:00) /
-    # step-ca-restore-test (12:00) jobs. Scheduled runs use the input defaults
-    # (build_target=all, build_mode=overwrite), and "all" is cloud-only — the
-    # ISO builds are opt-in via build_target=iso. Note: scheduled workflows
-    # only fire on the default branch.
+    # Sundays 14:00 UTC (09:00 CDT). Clear of the nightly job band.
     - cron: "0 14 * * 0"
   workflow_dispatch:
     inputs:
-      build_mode:
-        description: How to handle existing templates or VMIDs in Proxmox
+      templates:
+        description: "Cloud pipeline workflow names to run (space-separated; blank = all 9)"
         required: false
-        default: overwrite
-        type: choice
-        options:
-          - overwrite
-          - skip
-          - default
-      build_target:
-        # Free-form so a single directory can be passed
-        # (e.g. builds/linux/rocky/9-cloud). Keywords:
-        #   all/cloud  cloud-image builds only (default)
-        #   iso        ISO/kickstart builds only
-        #   all-linux  both
-        description: "build.py target: all|cloud|iso|all-linux|<build-dir>"
-        required: false
-        default: all
+        default: ""
         type: string
 
 permissions:
   contents: read
+  actions: write # dispatch the template-*-cloud workflows
 
 concurrency:
-  group: packer-target-environment
-  cancel-in-progress: true
+  group: build-templates-fanout
+  cancel-in-progress: false
 
 jobs:
-  build:
-    name: Build all templates
-    runs-on: arc-runners
+  fan-out:
+    name: Weekly cloud rebuild (fan-out)
+    runs-on: ubuntu-latest
     timeout-minutes: 720
     env:
-      VAULT_ADDR: ${{ vars.VAULT_ADDR }}
-      VAULT_TOKEN: ${{ secrets.VAULT_TOKEN }}
-      VAULT_CACERT: /tmp/vault-ca.pem
-      PACKER_LOG: "1"
+      GH_TOKEN: ${{ github.token }}
+      REPO: ${{ github.repository }}
     steps:
-      - name: Checkout
-        uses: actions/checkout@v4
-
-      - name: Set up Python
-        uses: actions/setup-python@v5
-        with:
-          python-version: "3.12"
-
-      - name: Set up Packer
-        uses: hashicorp/setup-packer@main
-        with:
-          version: "1.15.1"
-
-      - name: Install runner dependencies
+      - name: Dispatch each cloud pipeline serially and wait
         shell: bash
         run: |
-          set -euo pipefail
-          sudo apt-get update
-          sudo apt-get install -y --no-install-recommends ca-certificates sshpass xorriso
-          vault_version="1.19.5"
-          curl -fsSLo /tmp/vault.zip "https://releases.hashicorp.com/vault/${vault_version}/vault_${vault_version}_linux_amd64.zip"
-          sudo unzip -o /tmp/vault.zip vault -d /usr/local/bin
-          sudo chmod 0755 /usr/local/bin/vault
-
-      - name: Write Vault CA certificate
-        shell: bash
-        run: |
-          set -euo pipefail
-          printf '%s' "${{ secrets.VAULT_CACERT }}" > /tmp/vault-ca.pem
-          sudo install -m 0644 /tmp/vault-ca.pem /usr/local/share/ca-certificates/vault-viking-org.crt
-          sudo update-ca-certificates
-
-      - name: Install build dependencies
-        shell: bash
-        run: |
-          set -euo pipefail
-          python -m venv .venv
-          . .venv/bin/activate
-          python -m pip install --upgrade pip
-          python -m pip install -r requirements.txt
-          ansible-galaxy collection install -r requirements.yml
-
-      - name: Verify toolchain
-        shell: bash
-        run: |
-          set -euo pipefail
-          . .venv/bin/activate
-          python --version
-          ansible --version
-          ansible-playbook --version
-          ansible-galaxy --version
-          packer version
-          sshpass -V
-
-      - name: Initialize packer plugins
-        shell: bash
-        run: |
-          set -euo pipefail
-          . .venv/bin/activate
-          ./build.py --init-only "${{ github.event.inputs.build_target || 'all' }}"
-
-      - name: Build templates
-        shell: bash
-        run: |
-          set -euo pipefail
-          . .venv/bin/activate
-
-          build_mode="${{ github.event.inputs.build_mode }}"
-          if [ -z "$build_mode" ]; then
-            build_mode="overwrite"
+          set -uo pipefail
+          wfs="${{ github.event.inputs.templates }}"
+          if [ -z "$wfs" ]; then
+            wfs="template-rhel-8-cloud template-rhel-9-cloud template-rhel-10-cloud \
+                 template-rocky-8-cloud template-rocky-9-cloud template-rocky-10-cloud \
+                 template-ubuntu-24.04-cloud template-windows-2022-cloud template-windows-2025-cloud"
           fi
-
-          build_target="${{ github.event.inputs.build_target }}"
-          if [ -z "$build_target" ]; then
-            build_target="all"
-          fi
-
-          args=()
-          case "$build_mode" in
-            overwrite)
-              args+=(--overwrite)
-              ;;
-            skip)
-              args+=(--skip)
-              ;;
-            default)
-              ;;
-            *)
-              echo "Unsupported build mode: $build_mode" >&2
-              exit 1
-              ;;
-          esac
-
-          build_pid=""
-          cleanup() {
-            if [ -n "${build_pid}" ] && kill -0 "${build_pid}" 2>/dev/null; then
-              kill -INT "${build_pid}" 2>/dev/null || true
-              wait "${build_pid}" || true
+          overall=0
+          summary=()
+          for wf in $wfs; do
+            echo "::group::$wf"
+            prev="$(gh run list --repo "$REPO" --workflow "$wf.yml" --limit 1 --json databaseId -q '.[0].databaseId // "0"')"
+            gh workflow run "$wf.yml" --repo "$REPO"
+            # Wait for a NEW run to appear; fail loudly if the dispatch produced
+            # none (e.g. GITHUB_TOKEN lacking workflow_dispatch rights -> use a PAT).
+            rid=""
+            for _ in $(seq 1 20); do
+              sleep 6
+              cur="$(gh run list --repo "$REPO" --workflow "$wf.yml" --limit 1 --json databaseId -q '.[0].databaseId // "0"')"
+              if [ "$cur" != "$prev" ]; then rid="$cur"; break; fi
+            done
+            if [ -z "$rid" ]; then
+              echo "ERROR: no new run for $wf after dispatch (token may lack workflow_dispatch rights)"
+              overall=1; summary+=("$wf: NO-RUN"); echo "::endgroup::"; continue
             fi
-          }
-
-          trap 'cleanup; exit 130' INT TERM
-
-          ./build.py "${args[@]}" "$build_target" &
-          build_pid=$!
-          wait "${build_pid}"
+            gh run watch "$rid" --repo "$REPO" --exit-status >/dev/null 2>&1 || true
+            concl="$(gh run view "$rid" --repo "$REPO" --json conclusion -q '.conclusion')"
+            echo "$wf -> $concl (run $rid)"
+            [ "$concl" = "success" ] || overall=1
+            summary+=("$wf: $concl")
+            echo "::endgroup::"
+          done
+          echo "===== SUMMARY ====="
+          for s in "${summary[@]}"; do echo "  $s"; done
+          exit "$overall"

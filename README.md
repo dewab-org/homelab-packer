@@ -1,8 +1,9 @@
 # homelab.packer
 
-[![build-templates](https://github.com/dewab-org/homelab-packer/actions/workflows/build-templates.yml/badge.svg)](https://github.com/dewab-org/homelab-packer/actions/workflows/build-templates.yml)
 [![validate-templates](https://github.com/dewab-org/homelab-packer/actions/workflows/validate-templates.yml/badge.svg)](https://github.com/dewab-org/homelab-packer/actions/workflows/validate-templates.yml)
-[![verify-templates](https://github.com/dewab-org/homelab-packer/actions/workflows/verify-templates.yml/badge.svg)](https://github.com/dewab-org/homelab-packer/actions/workflows/verify-templates.yml)
+
+Per-template build/test status is in the tables below; `validate-templates` is
+the static gate (fmt/lint/validate on every push).
 
 Packer templates for building Proxmox VM templates across Linux families (RHEL,
 Rocky, Ubuntu) and Windows Server. Cloud-image builds are the default and
@@ -17,9 +18,9 @@ isolated and visible on its own badge instead of buried in one big job. Each
 delegates to the reusable [`_build-test-template.yml`](.github/workflows/_build-test-template.yml),
 which self-heals a missing clone-source base, builds (with retries + a
 template-exists check), then clone-verifies. They all serialize on one
-concurrency group (a single Proxmox target). The top-of-file `build-templates`
-badge is the weekly "rebuild everything" orchestrator (schedule + manual);
-`verify-templates` clone-tests the whole set after it.
+concurrency group (a single Proxmox target). The weekly `build-templates`
+workflow re-runs these cloud pipelines for drift detection — it dispatches each
+serially, so every badge above reflects the weekly run too.
 
 | Template | Build → test |
 | --- | --- |
@@ -115,9 +116,9 @@ CI follows the same rule. Pushes are handled by the per-template pipelines
 (`template-*.yml`), each path-filtered to an allowlist of *only its own build
 inputs*, so a change rebuilds just the affected cloud template(s) — never the
 ISO builds (there are no ISO pipelines) and never on docs (`.md`). The
-`build-templates` workflow no longer runs on push; it is the weekly/manual
-"rebuild everything" orchestrator, and ISO templates are rebuilt on demand via
-its `workflow_dispatch` with `build_target=iso`.
+`build-templates` workflow no longer runs on push; it is a weekly/manual
+fan-out that re-runs the cloud per-template pipelines (drift detection). ISO
+builds are by-hand only — their `template-*-iso` pipelines are disabled.
 
 ## Clone verification
 
@@ -143,10 +144,10 @@ export PROXMOX_URL=... PROXMOX_USERNAME=... PROXMOX_PASSWORD=... PROXMOX_NODE=..
 ./tests/clone-verify.py 9239 9432          # rocky-9 + win-2022, or any VMIDs
 ```
 
-CI runs it via the `verify-templates` workflow after every successful
-`build-templates` run, and on demand (`workflow_dispatch`). It clones live VMs,
-so it deliberately does not run on push and never runs concurrently with a
-build (shared concurrency group + the 9600+ clone VMID range).
+Each per-template pipeline runs it as its final step (build → clone-verify), and
+the weekly `build-templates` fan-out re-runs those pipelines. It clones live
+VMs, so runs never overlap (shared concurrency group + the 9600+ clone VMID
+range).
 
 ## Notes
 
@@ -261,6 +262,6 @@ Core, so a Core template generally still has to come from the ISO path.
 - All cloud templates ship both a `std` VGA display and a serial device; Windows additionally enables EMS/SAC on the serial line.
 - CI paths:
   - `template-*.yml` (one per cloud template): push-triggered build **and** clone-verify for that template — the primary path (badge table above).
-  - `build-templates`: schedule/manual "rebuild everything" orchestrator (`build_target` selects `cloud`/`iso`/`all-linux`/a single dir).
-  - `verify-templates`: clone-verify, after a `build-templates` run and on demand.
+  - `build-templates`: weekly/manual fan-out that re-runs the cloud per-template pipelines serially for drift detection (each template's own badge reflects it). Runs on a GitHub-hosted runner so it doesn't tie up an arc-runner.
+  - `template-*-iso.yml`: per-template ISO pipelines — **disabled**, by-hand only.
   - `validate-templates`: static validation (packer fmt/validate, Ansible syntax, pre-commit) on every push.
