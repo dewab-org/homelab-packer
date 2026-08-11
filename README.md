@@ -4,7 +4,10 @@
 [![validate-templates](https://github.com/dewab-org/homelab-packer/actions/workflows/validate-templates.yml/badge.svg)](https://github.com/dewab-org/homelab-packer/actions/workflows/validate-templates.yml)
 [![verify-templates](https://github.com/dewab-org/homelab-packer/actions/workflows/verify-templates.yml/badge.svg)](https://github.com/dewab-org/homelab-packer/actions/workflows/verify-templates.yml)
 
-Packer templates for building Proxmox VM templates across Linux families, plus in-progress Windows templates.
+Packer templates for building Proxmox VM templates across Linux families (RHEL,
+Rocky, Ubuntu) and Windows Server. Cloud-image builds are the default and
+maintained path — each is built, cloud-init-enabled, dual-console (VGA +
+serial), and clone-verified in CI. ISO/kickstart builds are opt-in.
 
 ## Per-template build → test pipelines
 
@@ -38,8 +41,9 @@ badge is the weekly "rebuild everything" orchestrator (schedule + manual);
 - `builds/linux/rocky/{8,9,10}-cloud`: Rocky cloud-image (GenericCloud qcow2) builds.
 - `builds/linux/ubuntu/24.04`: Ubuntu 24.04 autoinstall build.
 - `builds/linux/ubuntu/24.04-cloud`: Ubuntu 24.04 cloud-image build.
-- `builds/windows/windows-10`: Windows 10 stub.
-- `builds/windows/windows-server-2022`: Windows Server 2022 stub.
+- `builds/windows/windows-server-{2022,2025}-desktop-experience-cloud`: Windows Server cloud builds, cloned from a Microsoft evaluation VHD/VHDX (the maintained Windows path).
+- `builds/windows/windows-server-2025-{core,desktop-experience}`: Windows Server 2025 ISO builds.
+- `builds/windows/{windows-10,windows-server-2022}`: earlier Windows ISO stubs.
 - `ca/`: Custom CA certificates applied by Linux configure playbooks.
 - `build.py`: Init, validate, or build one or all templates.
 
@@ -89,11 +93,13 @@ Reach for `iso` when a vendor cloud image genuinely will not do: a from-scratch
 partition layout, an install-time option such as FIPS or a STIG profile, or an
 OS with no published cloud image.
 
-CI follows the same rule. The weekly Sunday rebuild and any push-triggered
-build run the default (cloud-only); ISO templates are rebuilt on demand via
-`workflow_dispatch` with `build_target=iso`. Pushes that touch *only* an ISO
-build directory do not trigger CI at all, since the default target would not
-rebuild the thing that changed.
+CI follows the same rule. Pushes are handled by the per-template pipelines
+(`template-*.yml`), each path-filtered to an allowlist of *only its own build
+inputs*, so a change rebuilds just the affected cloud template(s) — never the
+ISO builds (there are no ISO pipelines) and never on docs (`.md`). The
+`build-templates` workflow no longer runs on push; it is the weekly/manual
+"rebuild everything" orchestrator, and ISO templates are rebuilt on demand via
+its `workflow_dispatch` with `build_target=iso`.
 
 ## Clone verification
 
@@ -142,6 +148,10 @@ build (shared concurrency group + the 9600+ clone VMID range).
   Satellite registration, cert download, `dnf`) inside Ansible.
 - Use `./build.py --no-verify` to skip the post-build Proxmox check (the check
   needs `PROXMOX_*` set; without them it warns and trusts packer's exit code).
+- A non-template VM stranded on the output VMID (e.g. by a cancelled build) is
+  destroyed automatically before each build attempt, so a wedged/cancelled run
+  self-clears instead of failing the next build with "found matching VM but it
+  is not a template".
 - VMID mapping (cloud-base = ISO VMID +20, cloud template = ISO VMID +30):
   - RHEL 8/9/10 ISO: 9108/9109/9110; cloud-base: 9128/9129/9130; cloud: 9138/9139/9140
   - Rocky 8/9/10 ISO: 9208/9209/9210; cloud-base: 9228/9229/9230; cloud: 9238/9239/9240
@@ -176,9 +186,9 @@ which skips Windows Setup entirely (no `boot_command`, no keystroke timing).
 | `9432 windows-server-2022-desktop-experience-cloud` | SeaBIOS (MBR) | 40 G |
 | `9434 windows-server-2025-desktop-experience-cloud` | OVMF (GPT) | 64 G |
 
-**The base templates (9422/9424) are not kept.** Each is ~10 G of a 338 G thin
-pool and exists only so Packer can clone without re-importing. Recreate one
-before building:
+**The base templates (9422/9424) are disposable clone sources** — each is a
+small VHDX import kept only so Packer can clone without re-importing, and can be
+deleted to reclaim pool space. Recreate them if missing before building:
 
 ```sh
 set -a && source .env && set +a
@@ -193,17 +203,21 @@ Vault build credentials and injects it offline into
 removable-media search is a Windows *Setup* behaviour), and a stale one leaves
 the guest sitting at OOBE with no obvious error.
 
-Known gaps, both deliberate:
+**Cloud-init works on these templates.** Cloudbase-Init 1.1.8 is installed from
+the project's GitHub releases (`cloudbase.it` times out from this lab; GitHub
+does not — the asset is the same official MSI, checksum-pinned), so a clone
+consumes the Proxmox cloud-init drive (user, password, hostname, SSH key). The
+templates also carry **both consoles**: a `std` VGA display and a serial device
+with **EMS/SAC enabled on COM1** (`bcdedit /ems … EMSPORT:1 EMSBAUDRATE:115200`,
+self-verified in the build), so the guest is reachable on the serial line too.
+
+One known gap, deliberate:
 
 - **`switch_to_virtio` is off.** Templates ship on SATA/e1000. Moving the boot
   disk to virtio-scsi yields clones that boot into the Recovery Environment —
   having viostor/vioscsi in the driver store does not make the controller
   boot-critical. A fix needs a scratch virtio-scsi disk attached during the
   build so Windows enumerates the controller first.
-- **Cloudbase-Init is not installed.** `cloudbase.it` is unreachable from this
-  lab, so a clone will not consume its cloud-init drive. Mirror the MSI to
-  `web.viking.org/cdimages/Microsoft/` and uncomment `cloudbase_init_url` in the
-  cloud vars files to close this.
 
 **Edition selection differs between the two paths.** An ISO carries several
 editions in `install.wim` and the build picks one with `windows_image_index`
@@ -218,13 +232,17 @@ Core, so a Core template generally still has to come from the ISO path.
   - `rhel-10.2-x86_64-dvd.iso`
   (RHEL ISOs and qcow2 images are mirrored at <https://web.viking.org/cdimages/Linux/RedHat/>, backed by nas.viking.org:/mnt/pool0/cdimages)
 - All Linux builds enable Cloud-Init and the QEMU guest agent.
+- Every Linux build runs a full package upgrade at build time (`dnf '*' latest` / `apt dist-upgrade`, with retries; shared `builds/linux/ansible/tasks/system_upgrade.yml`), so clones boot fully patched instead of updating on first boot.
 - All RHEL and Rocky kickstarts install `cloud-init` during the installer phase; Ansible only verifies and enables it.
 - `iso_file` (Proxmox storage reference) takes precedence when set; otherwise `iso_url` downloads and `iso_checksum` validates when provided.
 - Rocky and Ubuntu ISO builds can download official ISOs into Packer cache (`**/packer_cache`, ignored by git) or use `iso_file`.
 - The Ubuntu cloud-image flow bootstraps a base template from Canonical's released Noble cloud image using Proxmox API import storage caching, then uses Packer `proxmox-clone` to template VMID 9311.
 - The cloud builds install the same packages and apply the same customizations as the kickstart builds (base package set, root/build users with identical passwords and authorized keys, sshd `90-packer.conf`, authselect sssd, timezone, enabled services, CA trust, identity cleanup). The one inherent difference: cloud images keep their single-partition root filesystem instead of the kickstart thin-LVM layout with separate `/var`, `/home`, and swap.
-- The RHEL/Rocky cloud-image flow works the same way: `builds/linux/common/scripts/bootstrap-cloud-bases.py` creates all six base templates from the pinned images in `builds/linux/common/cloud-base-images.json`; each `*-cloud` build directory symlinks the shared `builds/linux/common/cloud-clone-build.pkr.hcl`. RHEL cloud images register to RHN at cloud-init time (rh_subscription) so qemu-guest-agent can be installed, and are unregistered by the shared `builds/linux/ansible/cloud_configure.yml` before templating.
-- The cloud-image template disk is resized to 60G via a Proxmox API finalizer after cloning.
-- CI now has two paths:
-  - `build-templates`: full Proxmox build workflow, with manual `build_target` selection
-  - `validate-templates`: static validation workflow, with manual `validate_target` selection
+- The RHEL/Rocky cloud-image flow works the same way: `builds/linux/common/scripts/bootstrap-cloud-bases.py` creates all six base templates from the pinned images in `builds/linux/common/cloud-base-images.json`; each `*-cloud` build directory symlinks the shared `builds/linux/common/cloud-clone-build.pkr.hcl`. RHEL cloud images register to RHN at cloud-init time (rh_subscription) so qemu-guest-agent can be installed, and are unregistered by the shared `builds/linux/ansible/cloud_configure.yml` before templating. The unregister loops `unregister`/`clean` until `subscription-manager identity` reports nothing (or fails the build), so a flaky unregister can neither ship a still-registered template nor leak an orphaned RHN registration.
+- Linux cloud base templates are created at 60 G — the bootstrap resizes the imported disk and verifies it (`bootstrap-base-template.py --disk-size`, default 60 G / `PROXMOX_BASE_DISK_SIZE`); clones inherit it and cloud-init's growpart grows the filesystem on first boot. (Windows cloud templates stay at their VHDX sizes: 40 G / 64 G.)
+- All cloud templates ship both a `std` VGA display and a serial device; Windows additionally enables EMS/SAC on the serial line.
+- CI paths:
+  - `template-*.yml` (one per cloud template): push-triggered build **and** clone-verify for that template — the primary path (badge table above).
+  - `build-templates`: schedule/manual "rebuild everything" orchestrator (`build_target` selects `cloud`/`iso`/`all-linux`/a single dir).
+  - `verify-templates`: clone-verify, after a `build-templates` run and on demand.
+  - `validate-templates`: static validation (packer fmt/validate, Ansible syntax, pre-commit) on every push.
