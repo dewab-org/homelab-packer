@@ -277,9 +277,10 @@ flowchart TD
     wb["import Microsoft eval VHDX<br/>base template · SATA · 40G / 64G"]:::base
     wc["packer proxmox-clone<br/>clone base → boot → WinRM"]:::clone
     wo["offline unattend inject<br/>autounattend → Panther"]:::seed
+    wu["Windows Update (rgl plugin)<br/>full patch · reboots until clean"]:::update
     wp["PowerShell provisioners<br/>qemu-ga · virtio tools · lab CA · RDP/SSH<br/>EMS/SAC (bcdedit) · Cloudbase-Init · cleanup"]:::prov
     wt["template<br/>cloud-init drive (ide2) · VGA + serial + EMS"]:::tmpl
-    wb --> wc --> wo --> wp --> wt
+    wb --> wc --> wo --> wu --> wp --> wt
   end
 
   cv["clone-verify<br/>clone → cloud-init applies → login + CA → destroy"]:::verify
@@ -292,6 +293,7 @@ flowchart TD
   classDef prov fill:#313244,color:#cdd6f4,stroke:#89b4fa;
   classDef tmpl fill:#a6e3a1,color:#11111b,stroke:#94e2d5;
   classDef verify fill:#94e2d5,color:#11111b,stroke:#89dceb;
+  classDef update fill:#f5c2e7,color:#11111b,stroke:#eba0ac;
 ```
 
 ## Notes
@@ -374,6 +376,11 @@ consumes the Proxmox cloud-init drive (user, password, hostname, SSH key). The
 templates also carry **both consoles**: a `std` VGA display and a serial device
 with **EMS/SAC enabled on COM1** (`bcdedit /ems … EMSPORT:1 EMSBAUDRATE:115200`,
 self-verified in the build), so the guest is reachable on the serial line too.
+
+**Fully patched at build.** The build runs the `rgl/windows-update` provisioner
+first (Windows Update Agent, rebooting until no updates remain), so weekly
+rebuilds ship current. This needs Windows Update egress and can add significant
+time off an old base — that's the point.
 
 One known gap, deliberate:
 

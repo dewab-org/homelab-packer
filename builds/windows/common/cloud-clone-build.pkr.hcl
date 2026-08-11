@@ -36,6 +36,10 @@ packer {
       version = ">= 1.2.3"
       source  = "github.com/hashicorp/proxmox"
     }
+    windows-update = {
+      version = ">= 0.18.0"
+      source  = "github.com/rgl/windows-update"
+    }
   }
 }
 
@@ -145,6 +149,19 @@ source "proxmox-clone" "windows_cloud" {
 
 build {
   sources = ["source.proxmox-clone.windows_cloud"]
+
+  # Fully patch the image FIRST so weekly builds ship current and the rest of
+  # the config lands on a patched OS. The rgl plugin drives the Windows Update
+  # Agent and reboots as needed until no updates remain — this can add
+  # significant time off an old base, which is the point. Cleanup (998-cleanup)
+  # stays last, after this and the config below.
+  provisioner "windows-update" {
+    search_criteria = "IsInstalled=0"
+    filters = [
+      "exclude:$_.Title -like '*Preview*'",
+      "include:$true",
+    ]
+  }
 
   provisioner "powershell" {
     inline = ["New-Item -Path 'C:\\Install' -ItemType Directory -Force | Out-Null"]
