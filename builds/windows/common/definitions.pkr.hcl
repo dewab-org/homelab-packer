@@ -175,7 +175,7 @@ variable "template_description_prefix" {
 //
 // The vendor VHD boots SATA/e1000 because it carries no virtio drivers, and the
 // intent was to flip the finished template to virtio-scsi/virtio-net once
-// 03-install-virtio-guest-tools.ps1 had installed them. That does not work as
+// 10-install-virtio-guest-tools.ps1 had installed them. That does not work as
 // implemented: a clone of the switched template boots into the Windows Recovery
 // Environment. Installing the guest tools puts viostor/vioscsi in the driver
 // store, but that alone does not make the storage controller boot-critical, so

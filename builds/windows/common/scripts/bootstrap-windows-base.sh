@@ -26,6 +26,12 @@ set -euo pipefail
 
 IMAGE=""; VMID=""; NAME=""; FIRMWARE="seabios"; WINPART="1"; UNATTEND=""; FORCE=0
 STORAGE="local-lvm"; BRIDGE="vmbr0"; VLAN="10"; MEM="8192"; CORES="4"
+# Vendor eval images ship small (2022 VHD is 40G, 2025 VHDX is 64G), which
+# leaves no room once Windows Update lands a few cumulative rollups and an app
+# or two. Grow the base to match the ISO builds' 80G; clones inherit it, and
+# Cloudbase-Init's ExtendVolumesPlugin (see 60-install-cloudbase-init.ps1)
+# extends the partition on first boot so the space is actually usable.
+DISK_SIZE="80G"
 
 while [ $# -gt 0 ]; do
   case "$1" in
@@ -36,6 +42,7 @@ while [ $# -gt 0 ]; do
     --win-part) WINPART="$2"; shift 2 ;;       # 1 for MBR 2022, 3 for GPT 2025
     --unattend) UNATTEND="$2"; shift 2 ;;
     --storage) STORAGE="$2"; shift 2 ;;
+    --disk-size) DISK_SIZE="$2"; shift 2 ;;    # e.g. 80G; grow-only
     --force) FORCE=1; shift ;;
     *) echo "unknown arg: $1" >&2; exit 2 ;;
   esac
@@ -79,6 +86,26 @@ DISK=$(qm config "$VMID" | sed -n 's/^unused0: *//p')
 # and switch-template-to-virtio.py flips the bus afterwards.
 qm set "$VMID" --sata0 "${DISK},discard=on,ssd=1" >/dev/null
 qm set "$VMID" --boot order=sata0 >/dev/null
+
+# Grow the imported vendor disk to DISK_SIZE. Grow-only: qm disk resize refuses
+# to shrink, so skip when the image is already at or above target rather than
+# failing the whole import. Verify the new size actually took -- a resize that
+# silently no-ops would ship a base that is small again, and the symptom (disk
+# full months later) is a long way from the cause.
+want_b=$(numfmt --from=iec "${DISK_SIZE}")
+cur_b=$(qm config "$VMID" | sed -n 's/^sata0:.*size=\([0-9GMKT]*\).*/\1/p' | head -1)
+cur_b=$(numfmt --from=iec "${cur_b:-0}" 2>/dev/null || echo 0)
+if [ "$cur_b" -lt "$want_b" ]; then
+  echo "==> growing sata0 $(numfmt --to=iec "$cur_b") -> ${DISK_SIZE}"
+  qm disk resize "$VMID" sata0 "$DISK_SIZE" >/dev/null
+  new_b=$(qm config "$VMID" | sed -n 's/^sata0:.*size=\([0-9GMKT]*\).*/\1/p' | head -1)
+  new_b=$(numfmt --from=iec "${new_b:-0}" 2>/dev/null || echo 0)
+  [ "$new_b" -ge "$want_b" ] || {
+    echo "resize did not take: sata0 is $(numfmt --to=iec "$new_b"), wanted ${DISK_SIZE}" >&2; exit 1; }
+  echo "    verified sata0 now $(numfmt --to=iec "$new_b")"
+else
+  echo "==> sata0 already $(numfmt --to=iec "$cur_b") (>= ${DISK_SIZE}); no resize"
+fi
 qm set "$VMID" --ide2 "${STORAGE}:cloudinit" >/dev/null
 # citype MUST be configdrive2 for Windows: Cloudbase-Init does not read the
 # nocloud format. Proxmox defaults to configdrive2 only when ostype is a Windows
