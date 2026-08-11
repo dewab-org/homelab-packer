@@ -10,6 +10,14 @@ Rocky, Ubuntu) and Windows Server. Cloud-image builds are the default and
 maintained path — each is built, cloud-init-enabled, dual-console (VGA +
 serial), and clone-verified in CI. ISO/kickstart builds are opt-in.
 
+## Why I built this
+
+I frequently need to create ephemeral lab environments, and I want to use
+templates standardized for my environment to speed up the creation process.
+These ephemeral VMs are frequently used to demo or test Red Hat Satellite,
+Ansible Automation Platform, Docker, Kubernetes, Windows AD, etc. in sandboxed
+environments.
+
 ## Per-template build → test pipelines
 
 Each cloud template has its own pipeline (`template-*.yml`) that builds **and**
