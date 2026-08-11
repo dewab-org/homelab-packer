@@ -212,8 +212,21 @@ build {
     ]
   }
 
-  # Initial post-install workflow. Expand this list as the template hardens.
+  # Post-install workflow. This list is deliberately IDENTICAL across every
+  # Windows image -- ISO and cloud, Core and Desktop Experience -- so a template
+  # differs only in how it was installed, never in what it contains.
   provisioner "powershell" {
+    # Run via a scheduled task as the build user rather than straight over
+    # WinRM. DISM-backed operations (Add-WindowsCapability for OpenSSH in
+    # 21-enable-openssh.ps1, and the optional-feature installs in the 70s) fail
+    # with a bare "Access is denied" in a plain WinRM session, because that
+    # session does not carry a fully elevated token. The cloud build has always
+    # done this; the ISO builds did not need it until they reached parity and
+    # started running 21-enable-openssh.ps1, at which point they hit exactly the
+    # failure the cloud build's comment had been describing for months.
+    elevated_user     = local.build_username
+    elevated_password = local.build_password
+
     environment_vars = [
       "CLOUDBASE_INIT_URL=${local.cloudbase_init_url_env}",
       "CLOUDBASE_INIT_CHECKSUM=${local.cloudbase_init_checksum_env}",

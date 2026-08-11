@@ -214,6 +214,17 @@ build {
   # differs only in how it was installed, never in what it contains. Scripts all
   # live in builds/windows/common/scripts; there are no per-build copies.
   provisioner "powershell" {
+    # Run via a scheduled task as the build user rather than straight over
+    # WinRM. DISM-backed operations (Add-WindowsCapability for OpenSSH in
+    # 21-enable-openssh.ps1, and the optional-feature installs in the 70s) fail
+    # with a bare "Access is denied" in a plain WinRM session, because that
+    # session does not carry a fully elevated token. The cloud build has always
+    # done this; the ISO builds did not need it until they reached parity and
+    # started running 21-enable-openssh.ps1, at which point they hit exactly the
+    # failure the cloud build's comment had been describing for months.
+    elevated_user     = local.build_username
+    elevated_password = local.build_password
+
     scripts = [
       "${path.root}/../common/scripts/11-install-lab-ca.ps1",
       "${path.root}/../common/scripts/20-enable-rdp.ps1",
