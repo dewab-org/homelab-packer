@@ -8,14 +8,12 @@ on:
   push:
     branches: [main]
     paths:
-      - "builds/windows/windows-server-2022-desktop-experience-cloud/**"
+      - "builds/windows/windows-server-2022-desktop-experience-cloud/**/*.hcl"
       - "builds/windows/common/**"
       - "build.py"
       - "tests/clone-verify.py"
       - ".github/workflows/_build-test-template.yml"
       - ".github/workflows/template-windows-2022-cloud.yml"
-      # Never rebuild on docs-only changes (e.g. a README inside a build dir).
-      - "!**/*.md"
   workflow_dispatch:
     inputs:
       build_mode:

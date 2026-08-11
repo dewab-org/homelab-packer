@@ -8,15 +8,13 @@ on:
   push:
     branches: [main]
     paths:
-      - "builds/linux/rocky/10-cloud/**"
+      - "builds/linux/rocky/10-cloud/**/*.hcl"
       - "builds/linux/ansible/**"
       - "builds/linux/common/**"
       - "build.py"
       - "tests/clone-verify.py"
       - ".github/workflows/_build-test-template.yml"
       - ".github/workflows/template-rocky-10-cloud.yml"
-      # Never rebuild on docs-only changes (e.g. a README inside a build dir).
-      - "!**/*.md"
   workflow_dispatch:
     inputs:
       build_mode:
