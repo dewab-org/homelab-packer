@@ -1,8 +1,8 @@
 # Windows Server 2022 (Evaluation) ISO — build 20348, SERVER_EVAL x64 en-us.
 # Same single-ISO/both-editions arrangement as 2025: windows_image_index below
 # selects Core (1) vs Desktop Experience (2). Mirrored in the lab at:
-# iso_url = "https://web.viking.org/cdimages/Microsoft/20348.169.210806-2348.fe_release_svc_refresh_SERVER_EVAL_x64FRE_en-us.iso"
-iso_file = "iso_images:iso/20348.169.210806-2348.fe_release_svc_refresh_SERVER_EVAL_x64FRE_en-us.iso"
+# iso_url = "https://web.viking.org/cdimages/Microsoft/windows-server-2022-eval-x64-en-us-20348.169.iso"
+iso_file = "iso_images:iso/windows-server-2022-eval-x64-en-us-20348.169.iso"
 # iso_checksum is unused when iso_file is set (the ISO already lives in storage).
 
 # VirtIO drivers + guest tools ISO.
