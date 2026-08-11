@@ -48,6 +48,16 @@ jobs:
                  template-rocky-8-cloud template-rocky-9-cloud template-rocky-10-cloud \
                  template-ubuntu-24.04-cloud template-windows-2022-cloud template-windows-2025-cloud"
           fi
+          # SERIAL BY NECESSITY — do not parallelise this loop.
+          # There is ONE Proxmox target and the builds share VMID ranges (each
+          # build VM lands on the template's own VMID; clone-verify clones into
+          # 9600+), so two running at once would collide (VMID clashes, DHCP,
+          # resource contention). We dispatch one pipeline, block on it with
+          # `gh run watch` until it finishes, then start the next. The shared
+          # `packer-target-environment` concurrency group enforces the same rule
+          # from the other side: firing all nine at once would leave 1 running +
+          # 1 pending and CANCEL the other 7. Parallelism would require multiple
+          # Proxmox targets or non-overlapping VMID/clone ranges per template.
           overall=0
           summary=()
           for wf in $wfs; do
