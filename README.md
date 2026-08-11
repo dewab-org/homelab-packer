@@ -18,6 +18,49 @@ These ephemeral VMs are frequently used to demo or test Red Hat Satellite,
 Ansible Automation Platform, Docker, Kubernetes, Windows AD, etc. in sandboxed
 environments.
 
+## Requirements
+
+Building templates needs the homelab's build plumbing:
+
+### Lab services
+
+- **Proxmox VE** target node with API access — VMs are cloned/created here
+  (`PROXMOX_URL`, `PROXMOX_USERNAME`, `PROXMOX_PASSWORD`, `PROXMOX_NODE`,
+  `PROXMOX_STORAGE`, `PROXMOX_ISO_STORAGE`). Storage: a thin pool for templates
+  and an `iso_images` store holding install ISOs and the `virtio-win` ISO.
+- **HashiCorp Vault** (`vault.viking.org`) — every build secret lives in
+  `secret/packer` (Proxmox creds, Red Hat/RHN username + password, the
+  persistent build/root SSH keys, the Cloudbase-Init URL). Packer's native
+  `vault()` and the Ansible lookup both read it via `VAULT_ADDR` /
+  `VAULT_TOKEN` / `VAULT_CACERT`.
+- **web.viking.org mirror** — lab CA bundle (`/tmp/certs/`) and RHEL qcow2/DVD
+  images (`/cdimages/`), backed by `nas.viking.org:/mnt/pool0/cdimages`.
+- **Red Hat account/subscription** — RHEL builds register to RHN during the
+  build (creds from Vault) and unregister before templating.
+- **Microsoft evaluation VHD/VHDX** — Windows cloud bases are imported from
+  these (mirrored in the cdimages repo).
+
+### Toolchain (local by-hand builds)
+
+- **Packer** ≥ 1.15 with the `proxmox` and `ansible` plugins (installed by
+  `./build.py --init-only`).
+- **Python 3.12** venv with `requirements.txt` (proxmoxer, ansible-core) and the
+  collections in `requirements.yml`; **Ansible** runs the Linux playbooks.
+- **pre-commit** — owns all formatting/auto-fixes and lint (packer fmt, yamllint,
+  markdownlint, ansible-lint, gitleaks). Install with `pre-commit install`.
+- `sshpass`, `xorriso`, `openssh` for the build/verify helpers.
+
+### CI
+
+- **Arc-runners** — self-hosted GitHub Actions Runner Controller pool (on the
+  k3s cluster) that runs the per-template build/verify pipelines; they need lab
+  network + Vault access. The weekly `build-templates` fan-out runs on
+  `ubuntu-latest` (GitHub-hosted) and only dispatches, so it never ties one up.
+- Repo secrets `VAULT_TOKEN` (non-expiring orphan token, policy
+  `github-actions-packer`) and `VAULT_CACERT`; repo var `VAULT_ADDR`. The
+  fan-out dispatches the per-template workflows with `GITHUB_TOKEN`
+  (`actions: write`).
+
 ## Per-template build → test pipelines
 
 Each cloud template has its own pipeline (`template-*.yml`) that builds **and**
@@ -156,6 +199,100 @@ Each per-template pipeline runs it as its final step (build → clone-verify), a
 the weekly `build-templates` fan-out re-runs those pipelines. It clones live
 VMs, so runs never overlap (shared concurrency group + the 9600+ clone VMID
 range).
+
+## Diagrams
+
+Colours follow the [Catppuccin Mocha](https://catppuccin.com/palette) palette.
+
+### CI workflow
+
+```mermaid
+%%{init: {"theme":"base","themeVariables":{"primaryColor":"#313244","primaryTextColor":"#cdd6f4","primaryBorderColor":"#89b4fa","lineColor":"#89b4fa","fontFamily":"ui-monospace, SFMono-Regular, monospace","clusterBkg":"#181825","clusterBorder":"#585b70","titleColor":"#cdd6f4","edgeLabelBackground":"#11111b"}}}%%
+flowchart TD
+  dev(["Developer"]):::mauve
+  cron{{"Weekly cron — Sun 14:00 UTC"}}:::yellow
+  dev -->|"git push"| val
+  dev -->|"manual dispatch"| tpl
+  cron --> fan
+
+  subgraph gate["CI gate — every push"]
+    val[["validate-templates<br/>pre-commit: fmt · lint · gitleaks<br/>+ packer validate"]]:::green
+  end
+
+  subgraph orch["Orchestration"]
+    fan[["build-templates fan-out<br/>ubuntu-latest<br/>dispatch 9 pipelines SERIALLY"]]:::blue
+    iso[["template-*-iso ×7<br/>DISABLED — by hand only"]]:::muted
+  end
+  fan -->|"one at a time, waits each"| tpl
+
+  subgraph pipe["Per-template cloud pipeline ×9"]
+    tpl[["template-*-cloud<br/>push (path-filtered) / dispatch"]]:::sapphire
+    reuse[["_build-test-template.yml<br/>on arc-runner (self-hosted)"]]:::lavender
+    b1["ensure base<br/>self-heal if missing / undersized"]:::step
+    b2["build.py → packer<br/>retries · purge stranded VM"]:::step
+    b3["clone-verify<br/>login · hostname · sudo · CA"]:::step
+    tpl --> reuse --> b1 --> b2 --> b3
+  end
+
+  vault[("HashiCorp Vault<br/>vault.viking.org")]:::red
+  secrets[/"secret/packer<br/>PROXMOX_* · RHN creds · SSH keys"/]:::peach
+  reuse -. "VAULT_ADDR / TOKEN / CACERT" .-> vault
+  vault -. "reads" .-> secrets
+  secrets -. "used by" .-> b2
+
+  pve[("Proxmox target<br/>single node · shared VMIDs")]:::teal
+  b2 --> pve
+  b3 --> pve
+
+  classDef mauve fill:#cba6f7,color:#11111b,stroke:#b4befe;
+  classDef yellow fill:#f9e2af,color:#11111b,stroke:#fab387;
+  classDef green fill:#a6e3a1,color:#11111b,stroke:#94e2d5;
+  classDef blue fill:#89b4fa,color:#11111b,stroke:#b4befe;
+  classDef sapphire fill:#74c7ec,color:#11111b,stroke:#89dceb;
+  classDef lavender fill:#b4befe,color:#11111b,stroke:#89b4fa;
+  classDef step fill:#313244,color:#cdd6f4,stroke:#89b4fa;
+  classDef red fill:#f38ba8,color:#11111b,stroke:#eba0ac;
+  classDef peach fill:#fab387,color:#11111b,stroke:#f9e2af;
+  classDef teal fill:#94e2d5,color:#11111b,stroke:#89dceb;
+  classDef muted fill:#45475a,color:#a6adc8,stroke:#6c7086,stroke-dasharray:4 3;
+```
+
+### VM build flow — Linux and Windows
+
+```mermaid
+%%{init: {"theme":"base","themeVariables":{"primaryColor":"#313244","primaryTextColor":"#cdd6f4","primaryBorderColor":"#89b4fa","lineColor":"#89b4fa","fontFamily":"ui-monospace, SFMono-Regular, monospace","clusterBkg":"#181825","clusterBorder":"#585b70","titleColor":"#cdd6f4","edgeLabelBackground":"#11111b"}}}%%
+flowchart TD
+  subgraph linux["Linux — RHEL / Rocky / Ubuntu"]
+    lb["bootstrap base<br/>import vendor qcow2 → resize 60G → template"]:::base
+    lc["packer proxmox-clone<br/>clone base → boot"]:::clone
+    ls["cloud-init seed<br/>build user + qemu-guest-agent<br/>RHEL: rh_subscription register"]:::seed
+    la["Ansible<br/>packages + full upgrade (dnf/apt)<br/>CA trust · sshd · timezone · services"]:::prov
+    lu["RHEL only: unregister<br/>retry until identity gone"]:::prov
+    lx["cleanup<br/>machine-id · host keys · cloud-init re-arm"]:::prov
+    lt["template<br/>cloud-init drive (ide0) · VGA + serial · 60G"]:::tmpl
+    lb --> lc --> ls --> la --> lu --> lx --> lt
+  end
+
+  subgraph win["Windows — Server 2022 / 2025"]
+    wb["import Microsoft eval VHDX<br/>base template · SATA · 40G / 64G"]:::base
+    wc["packer proxmox-clone<br/>clone base → boot → WinRM"]:::clone
+    wo["offline unattend inject<br/>autounattend → Panther"]:::seed
+    wp["PowerShell provisioners<br/>qemu-ga · virtio tools · lab CA · RDP/SSH<br/>EMS/SAC (bcdedit) · Cloudbase-Init · cleanup"]:::prov
+    wt["template<br/>cloud-init drive (ide2) · VGA + serial + EMS"]:::tmpl
+    wb --> wc --> wo --> wp --> wt
+  end
+
+  cv["clone-verify<br/>clone → cloud-init applies → login + CA → destroy"]:::verify
+  lt --> cv
+  wt --> cv
+
+  classDef base fill:#cba6f7,color:#11111b,stroke:#b4befe;
+  classDef clone fill:#89b4fa,color:#11111b,stroke:#b4befe;
+  classDef seed fill:#f9e2af,color:#11111b,stroke:#fab387;
+  classDef prov fill:#313244,color:#cdd6f4,stroke:#89b4fa;
+  classDef tmpl fill:#a6e3a1,color:#11111b,stroke:#94e2d5;
+  classDef verify fill:#94e2d5,color:#11111b,stroke:#89dceb;
+```
 
 ## Notes
 
