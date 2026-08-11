@@ -15,6 +15,8 @@ on:
       - "tests/clone-verify.py"
       - ".github/workflows/_build-test-template.yml"
       - ".github/workflows/template-ubuntu-24.04-cloud.yml"
+      # Never rebuild on docs-only changes (e.g. a README inside a build dir).
+      - "!**/*.md"
   workflow_dispatch:
     inputs:
       build_mode:
