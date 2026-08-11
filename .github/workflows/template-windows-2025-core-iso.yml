@@ -1,0 +1,34 @@
+name: template-windows-2025-core-iso
+
+# Windows ISO build for one template. BY-HAND ONLY and DISABLED by default:
+# ISO installs are slow (full Windows Setup), so they never run on push or
+# schedule. This workflow is `gh workflow disable`d — enable + dispatch when you
+# specifically need a CI ISO rebuild, or run `./build.py builds/windows/windows-server-2025-core-iso` locally.
+
+on:
+  workflow_dispatch:
+    inputs:
+      build_mode:
+        description: "How to handle an existing template/VMID"
+        required: false
+        default: overwrite
+        type: choice
+        options:
+          - overwrite
+          - skip
+          - default
+
+permissions:
+  contents: read
+
+concurrency:
+  group: packer-target-environment
+  cancel-in-progress: false
+
+jobs:
+  build-test:
+    uses: ./.github/workflows/_build-test-template.yml
+    with:
+      build_dir: builds/windows/windows-server-2025-core-iso
+      build_mode: ${{ inputs.build_mode || 'overwrite' }}
+    secrets: inherit

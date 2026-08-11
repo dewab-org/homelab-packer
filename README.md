@@ -102,6 +102,10 @@ just run `./build.py builds/linux/<os>/<ver>-iso` locally.
 | Rocky 9 ISO | [![template-rocky-9-iso](https://github.com/dewab-org/homelab-packer/actions/workflows/template-rocky-9-iso.yml/badge.svg)](https://github.com/dewab-org/homelab-packer/actions/workflows/template-rocky-9-iso.yml) |
 | Rocky 10 ISO | [![template-rocky-10-iso](https://github.com/dewab-org/homelab-packer/actions/workflows/template-rocky-10-iso.yml/badge.svg)](https://github.com/dewab-org/homelab-packer/actions/workflows/template-rocky-10-iso.yml) |
 | Ubuntu 24.04 ISO | [![template-ubuntu-24.04-iso](https://github.com/dewab-org/homelab-packer/actions/workflows/template-ubuntu-24.04-iso.yml/badge.svg)](https://github.com/dewab-org/homelab-packer/actions/workflows/template-ubuntu-24.04-iso.yml) |
+| Windows Server 2022 Core ISO | [![template-windows-2022-core-iso](https://github.com/dewab-org/homelab-packer/actions/workflows/template-windows-2022-core-iso.yml/badge.svg)](https://github.com/dewab-org/homelab-packer/actions/workflows/template-windows-2022-core-iso.yml) |
+| Windows Server 2022 Desktop ISO | [![template-windows-2022-desktop-experience-iso](https://github.com/dewab-org/homelab-packer/actions/workflows/template-windows-2022-desktop-experience-iso.yml/badge.svg)](https://github.com/dewab-org/homelab-packer/actions/workflows/template-windows-2022-desktop-experience-iso.yml) |
+| Windows Server 2025 Core ISO | [![template-windows-2025-core-iso](https://github.com/dewab-org/homelab-packer/actions/workflows/template-windows-2025-core-iso.yml/badge.svg)](https://github.com/dewab-org/homelab-packer/actions/workflows/template-windows-2025-core-iso.yml) |
+| Windows Server 2025 Desktop ISO | [![template-windows-2025-desktop-experience-iso](https://github.com/dewab-org/homelab-packer/actions/workflows/template-windows-2025-desktop-experience-iso.yml/badge.svg)](https://github.com/dewab-org/homelab-packer/actions/workflows/template-windows-2025-desktop-experience-iso.yml) |
 
 ## Layout
 
@@ -333,8 +337,8 @@ breaks it too), so the Windows allocation is an explicit table:
 
 | Build | ISO | cloud-base | cloud |
 | --- | --- | --- | --- |
-| Server 2022 Core | *(ISO-only, see below)* | 9421 *(planned — no Core VHD)* | 9431 *(planned — no Core VHD)* |
-| Server 2022 Desktop Experience | — | 9422 | 9432 |
+| Server 2022 Core | 9411 | 9421 *(planned — no Core VHD)* | 9431 *(planned — no Core VHD)* |
+| Server 2022 Desktop Experience | 9413 | 9422 | 9432 |
 | Server 2025 Core | 9401 | 9423 *(planned — no Core VHD)* | 9433 *(planned — no Core VHD)* |
 | Server 2025 Desktop Experience | 9403 | 9424 | 9434 |
 
@@ -380,10 +384,10 @@ templates also carry **both consoles**: a `std` VGA display and a serial device
 with **EMS/SAC enabled on COM1** (`bcdedit /ems … EMSPORT:1 EMSBAUDRATE:115200`,
 self-verified in the build), so the guest is reachable on the serial line too.
 
-**Fully patched at build.** The build runs the `rgl/windows-update` provisioner
-first (Windows Update Agent, rebooting until no updates remain), so weekly
-rebuilds ship current. This needs Windows Update egress and can add significant
-time off an old base — that's the point.
+**Fully patched at build.** Every Windows build (cloud **and** ISO) runs the
+`rgl/windows-update` provisioner first (Windows Update Agent, rebooting until no
+updates remain), so rebuilds ship current. This needs Windows Update egress and
+can add significant time off an old base — that's the point.
 
 One known gap, deliberate:
 
