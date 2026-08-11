@@ -106,7 +106,7 @@ build {
   sources = ["source.proxmox-clone.ubuntu_24_04_cloud"]
 
   provisioner "ansible" {
-    playbook_file    = "${path.root}/../24.04/ansible/configure.yml"
+    playbook_file    = "${path.root}/../24.04-iso/ansible/configure.yml"
     user             = local.build_username
     ansible_env_vars = ["ANSIBLE_CONFIG=${path.root}/../../../../ansible.cfg", "OBJC_DISABLE_INITIALIZE_FORK_SAFETY=YES", "ANSIBLE_HASHI_VAULT_VALIDATE_CERTS=false"]
   }

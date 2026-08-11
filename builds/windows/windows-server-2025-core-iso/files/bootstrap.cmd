@@ -9,4 +9,3 @@ for %%i in (D E F G H I J K L M N O P) do (
 )
 
 exit /b 0
-

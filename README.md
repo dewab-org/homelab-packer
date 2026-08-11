@@ -91,7 +91,7 @@ ISO builds mirror the same per-template structure (`template-*-iso.yml`) but are
 **`workflow_dispatch`-only and `gh workflow disable`d**: they are slow and
 fragile (installer boot-command timing), so they never run on push or schedule.
 Enable + dispatch a pipeline when you specifically need a CI ISO rebuild, or
-just run `./build.py builds/linux/<os>/<ver>` locally.
+just run `./build.py builds/linux/<os>/<ver>-iso` locally.
 
 | Template | Build → test (disabled) |
 | --- | --- |
@@ -105,15 +105,18 @@ just run `./build.py builds/linux/<os>/<ver>` locally.
 
 ## Layout
 
-- `builds/linux/rhel/{8,9,10}`: RHEL ISO/kickstart builds with RHN registration and Cloud-Init.
+Every build directory is suffixed `-iso` or `-cloud` so the flavour is
+unambiguous.
+
+- `builds/linux/rhel/{8,9,10}-iso`: RHEL ISO/kickstart builds with RHN registration and Cloud-Init.
 - `builds/linux/rhel/{8,9,10}-cloud`: RHEL cloud-image (qcow2) builds cloned from bootstrapped base templates.
-- `builds/linux/rocky/{8,9,10}`: Rocky Linux ISO/kickstart builds with Cloud-Init.
+- `builds/linux/rocky/{8,9,10}-iso`: Rocky Linux ISO/kickstart builds with Cloud-Init.
 - `builds/linux/rocky/{8,9,10}-cloud`: Rocky cloud-image (GenericCloud qcow2) builds.
-- `builds/linux/ubuntu/24.04`: Ubuntu 24.04 autoinstall build.
+- `builds/linux/ubuntu/24.04-iso`: Ubuntu 24.04 autoinstall (ISO) build.
 - `builds/linux/ubuntu/24.04-cloud`: Ubuntu 24.04 cloud-image build.
 - `builds/windows/windows-server-{2022,2025}-desktop-experience-cloud`: Windows Server cloud builds, cloned from a Microsoft evaluation VHD/VHDX (the maintained Windows path).
-- `builds/windows/windows-server-2025-{core,desktop-experience}`: Windows Server 2025 ISO builds.
-- `builds/windows/{windows-10,windows-server-2022}`: earlier Windows ISO stubs.
+- `builds/windows/windows-server-{2022,2025}-{core,desktop-experience}-iso`: Windows Server ISO builds (Core = image index 1, Desktop Experience = index 2).
+- `builds/windows/windows-10-iso`: Windows 10 ISO stub.
 - `ca/`: Custom CA certificates applied by Linux configure playbooks.
 - `build.py`: Init, validate, or build one or all templates.
 
@@ -125,14 +128,14 @@ just run `./build.py builds/linux/<os>/<ver>` locally.
 4. Initialize or validate a target before building, for example:
 
 ```sh
-./build.py --init-only builds/linux/rhel/10
-./build.py --validate-only builds/linux/rhel/10
+./build.py --init-only builds/linux/rhel/10-iso
+./build.py --validate-only builds/linux/rhel/10-iso
 ```
 
 1. Build a template, for example:
 
 ```sh
-./build.py builds/linux/rhel/10
+./build.py builds/linux/rhel/10-iso
 ```
 
 ## Build targets — cloud-image first

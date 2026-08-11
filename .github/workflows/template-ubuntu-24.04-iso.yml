@@ -4,7 +4,7 @@ name: template-ubuntu-24.04-iso
 # ISO builds are slow and fragile (installer boot-command keystroke timing), so
 # they never run on push or schedule. This workflow is `gh workflow disable`d —
 # enable it and dispatch when you specifically need a CI ISO rebuild, or just
-# run `./build.py builds/linux/ubuntu/24.04` locally.
+# run `./build.py builds/linux/ubuntu/24.04-iso` locally.
 
 on:
   workflow_dispatch:
@@ -30,6 +30,6 @@ jobs:
   build-test:
     uses: ./.github/workflows/_build-test-template.yml
     with:
-      build_dir: builds/linux/ubuntu/24.04
+      build_dir: builds/linux/ubuntu/24.04-iso
       build_mode: ${{ inputs.build_mode || 'overwrite' }}
     secrets: inherit
