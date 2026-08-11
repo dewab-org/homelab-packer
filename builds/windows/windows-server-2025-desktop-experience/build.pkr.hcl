@@ -98,7 +98,7 @@ source "proxmox-iso" "windows_server_2025_desktop_experience" {
       "/bootstrap.ps1"                              = file("../common/files/bootstrap.ps1")
       "/scripts/01-install-qemu-ga.ps1"             = file("../common/scripts/01-install-qemu-ga.ps1")
       "/scripts/02-enable-winrm.ps1"                = file("../common/scripts/02-enable-winrm.ps1")
-      "/root_ca_bundle.pem"                          = file("../common/files/root_ca_bundle.pem")
+      "/root_ca_bundle.pem"                         = file("../common/files/root_ca_bundle.pem")
       "/scripts/10-enable-rdp.ps1"                  = file("../common/scripts/10-enable-rdp.ps1")
       "/scripts/12-enable-openssh.ps1"              = file("../common/scripts/12-enable-openssh.ps1")
       "/scripts/30-ConfigureRemotingForAnsible.ps1" = file("../common/scripts/30-ConfigureRemotingForAnsible.ps1")

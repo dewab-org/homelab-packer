@@ -33,6 +33,24 @@ badge is the weekly "rebuild everything" orchestrator (schedule + manual);
 | Windows Server 2022 cloud | [![template-windows-2022-cloud](https://github.com/dewab-org/homelab-packer/actions/workflows/template-windows-2022-cloud.yml/badge.svg)](https://github.com/dewab-org/homelab-packer/actions/workflows/template-windows-2022-cloud.yml) |
 | Windows Server 2025 cloud | [![template-windows-2025-cloud](https://github.com/dewab-org/homelab-packer/actions/workflows/template-windows-2025-cloud.yml/badge.svg)](https://github.com/dewab-org/homelab-packer/actions/workflows/template-windows-2025-cloud.yml) |
 
+### ISO/kickstart templates — by-hand, disabled
+
+ISO builds mirror the same per-template structure (`template-*-iso.yml`) but are
+**`workflow_dispatch`-only and `gh workflow disable`d**: they are slow and
+fragile (installer boot-command timing), so they never run on push or schedule.
+Enable + dispatch a pipeline when you specifically need a CI ISO rebuild, or
+just run `./build.py builds/linux/<os>/<ver>` locally.
+
+| Template | Build → test (disabled) |
+| --- | --- |
+| RHEL 8 ISO | [![template-rhel-8-iso](https://github.com/dewab-org/homelab-packer/actions/workflows/template-rhel-8-iso.yml/badge.svg)](https://github.com/dewab-org/homelab-packer/actions/workflows/template-rhel-8-iso.yml) |
+| RHEL 9 ISO | [![template-rhel-9-iso](https://github.com/dewab-org/homelab-packer/actions/workflows/template-rhel-9-iso.yml/badge.svg)](https://github.com/dewab-org/homelab-packer/actions/workflows/template-rhel-9-iso.yml) |
+| RHEL 10 ISO | [![template-rhel-10-iso](https://github.com/dewab-org/homelab-packer/actions/workflows/template-rhel-10-iso.yml/badge.svg)](https://github.com/dewab-org/homelab-packer/actions/workflows/template-rhel-10-iso.yml) |
+| Rocky 8 ISO | [![template-rocky-8-iso](https://github.com/dewab-org/homelab-packer/actions/workflows/template-rocky-8-iso.yml/badge.svg)](https://github.com/dewab-org/homelab-packer/actions/workflows/template-rocky-8-iso.yml) |
+| Rocky 9 ISO | [![template-rocky-9-iso](https://github.com/dewab-org/homelab-packer/actions/workflows/template-rocky-9-iso.yml/badge.svg)](https://github.com/dewab-org/homelab-packer/actions/workflows/template-rocky-9-iso.yml) |
+| Rocky 10 ISO | [![template-rocky-10-iso](https://github.com/dewab-org/homelab-packer/actions/workflows/template-rocky-10-iso.yml/badge.svg)](https://github.com/dewab-org/homelab-packer/actions/workflows/template-rocky-10-iso.yml) |
+| Ubuntu 24.04 ISO | [![template-ubuntu-24.04-iso](https://github.com/dewab-org/homelab-packer/actions/workflows/template-ubuntu-24.04-iso.yml/badge.svg)](https://github.com/dewab-org/homelab-packer/actions/workflows/template-ubuntu-24.04-iso.yml) |
+
 ## Layout
 
 - `builds/linux/rhel/{8,9,10}`: RHEL ISO/kickstart builds with RHN registration and Cloud-Init.

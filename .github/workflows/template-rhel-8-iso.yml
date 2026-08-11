@@ -1,0 +1,35 @@
+name: template-rhel-8-iso
+
+# ISO/kickstart build for one template. BY-HAND ONLY and DISABLED by default:
+# ISO builds are slow and fragile (installer boot-command keystroke timing), so
+# they never run on push or schedule. This workflow is `gh workflow disable`d —
+# enable it and dispatch when you specifically need a CI ISO rebuild, or just
+# run `./build.py builds/linux/rhel/8` locally.
+
+on:
+  workflow_dispatch:
+    inputs:
+      build_mode:
+        description: "How to handle an existing template/VMID"
+        required: false
+        default: overwrite
+        type: choice
+        options:
+          - overwrite
+          - skip
+          - default
+
+permissions:
+  contents: read
+
+concurrency:
+  group: packer-target-environment
+  cancel-in-progress: false
+
+jobs:
+  build-test:
+    uses: ./.github/workflows/_build-test-template.yml
+    with:
+      build_dir: builds/linux/rhel/8
+      build_mode: ${{ inputs.build_mode || 'overwrite' }}
+    secrets: inherit

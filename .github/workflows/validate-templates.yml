@@ -66,13 +66,9 @@ jobs:
         run: |
           set -euo pipefail
           . .venv/bin/activate
+          # pre-commit owns formatting (packer fmt, terraform fmt, whitespace,
+          # markdown) and linting; this is the CI gate that runs the same hooks.
           pre-commit run --all-files
-
-      - name: Check Packer formatting
-        shell: bash
-        run: |
-          set -euo pipefail
-          packer fmt -check -recursive .
 
       - name: Check Ansible syntax
         shell: bash

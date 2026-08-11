@@ -1,8 +1,8 @@
 # Base template 9130 is bootstrapped from the upstream qcow2 by
 # builds/linux/common/scripts/bootstrap-cloud-bases.py (see
 # builds/linux/common/cloud-base-images.json for the pinned image + sha256).
-clone_vm_id   = 9130
-vm_id         = 9140
-template_name = "rhel-10-cloud"
-tags          = "rhel;cloud-init;packer"
+clone_vm_id       = 9130
+vm_id             = 9140
+template_name     = "rhel-10-cloud"
+tags              = "rhel;cloud-init;packer"
 rhel_subscription = true

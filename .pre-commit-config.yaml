@@ -39,3 +39,14 @@ repos:
     hooks:
       - id: terraform_fmt
       - id: terraform_validate
+
+  # Formatting is a pre-commit responsibility, not CI's. packer fmt rewrites
+  # HCL in place; pre-commit then fails if anything changed so you re-stage.
+  - repo: local
+    hooks:
+      - id: packer-fmt
+        name: packer fmt
+        entry: packer fmt -recursive .
+        language: system
+        pass_filenames: false
+        files: \.(pkr\.hcl|pkrvars\.hcl|pkrtpl\.hcl)$
