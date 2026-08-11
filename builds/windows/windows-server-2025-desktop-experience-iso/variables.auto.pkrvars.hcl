@@ -25,3 +25,9 @@ vm_id = 9403
 # Pin Desktop Experience explicitly. On the current Server 2025 eval ISO,
 # index 2 is Standard Desktop Experience while index 1 is Standard Core.
 windows_image_index = 2
+
+# Build and land this template on the NFS datastore rather than the node's
+# local-lvm thin pool. local-lvm sits ~86% full with 48 volumes on it, and an
+# 80G Windows build is a poor neighbour there; nas-datastore01 has ~10.6TB free
+# and is NFS 4.2, so discard=on in the build can actually reclaim space.
+storage_pool = "nas-datastore01"

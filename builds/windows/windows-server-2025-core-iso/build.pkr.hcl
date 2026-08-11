@@ -73,6 +73,15 @@ source "proxmox-iso" "windows_server_2025_core" {
     disk_size    = "80G"
     storage_pool = local.storage_pool
     format       = "raw"
+
+    # discard=on so space freed inside the guest is punched out of the backing
+    # store instead of being held forever. Without it a template disk only ever
+    # grows: the ~GBs of Windows Update payload that 998-cleanup deletes stayed
+    # allocated. Requires a backing store that can punch holes -- nas-datastore01
+    # is NFS 4.2, which can. ssd=true advertises the disk as non-rotational so
+    # Windows issues TRIM (and skips scheduled defrag) rather than sitting on it.
+    discard = true
+    ssd     = true
   }
 
   network_adapters {
@@ -91,12 +100,24 @@ source "proxmox-iso" "windows_server_2025_core" {
 
   additional_iso_files {
     cd_content = {
-      "/Autounattend.xml"                           = local.autounattend_xml
-      "/bootstrap.cmd"                              = file("files/bootstrap.cmd")
-      "/bootstrap.ps1"                              = file("files/bootstrap.ps1")
-      "/scripts/02-enable-winrm.ps1"                = file("scripts/02-enable-winrm.ps1")
-      "/scripts/30-ConfigureRemotingForAnsible.ps1" = file("scripts/30-ConfigureRemotingForAnsible.ps1")
-      "/scripts/31-ansible-winrm-enablecredssp.ps1" = file("scripts/31-ansible-winrm-enablecredssp.ps1")
+      "/Autounattend.xml" = local.autounattend_xml
+      "/bootstrap.cmd"    = file("../common/files/bootstrap.cmd")
+      "/bootstrap.ps1"    = file("../common/files/bootstrap.ps1")
+      # bootstrap.ps1 installs the guest agent before WinRM: Packer discovers the
+      # VM's IP through the agent, so it has to exist before the listener matters.
+      # Full guest tools FIRST: the QEMU agent reaches the host over a
+      # virtio-serial channel and the agent-only MSI does not install that
+      # driver, so without this Packer never discovers the VM IP.
+      "/scripts/10-install-virtio-guest-tools.ps1" = file("../common/scripts/10-install-virtio-guest-tools.ps1")
+      "/scripts/00-install-qemu-ga.ps1"            = file("../common/scripts/00-install-qemu-ga.ps1")
+      # NOTE: only the scripts bootstrap.ps1 actually runs are shipped here.
+      # Everything else runs as a provisioner, where Packer uploads its own
+      # copy - shipping those on the CD staged files nothing ever executed.
+      # In particular 24-configure-winrm-for-ansible.ps1 is a provisioner: the
+      # HTTPS/CredSSP config it applies is for CLONES, not for the build.
+      "/scripts/01-enable-winrm.ps1" = file("../common/scripts/01-enable-winrm.ps1")
+      # 11-install-lab-ca.ps1 reads this off the CD and throws if it is absent.
+      "/root_ca_bundle.pem" = file("../common/files/root_ca_bundle.pem")
     }
     cd_label         = local.cd_label
     iso_storage_pool = local.iso_storage_pool
@@ -117,14 +138,37 @@ source "proxmox-iso" "windows_server_2025_core" {
   }
 
   # Let Autounattend drive setup; WinRM becomes available once bootstrap runs.
-  boot_wait = "5s"
+  # Start typing early: keys sent before the prompt are harmlessly discarded,
+  # so the failure mode to avoid is being LATE, not early.
+  boot_wait = "3s"
 
   # First boot must prefer the Windows install ISO (ide2) over the empty disk.
   boot = "order=ide2;scsi0"
 
-  # Windows install media often waits at "Press any key to boot from CD/DVD...".
-  # Send a key a few times early in the boot; this runs only once at VM start.
-  boot_command = ["<spacebar><spacebar>"]
+  # Windows install media stops at "Press any key to boot from CD or DVD..." and
+  # waits only ~5s. OVMF POST on q35 with a 4m EFI disk is slow and varies run to
+  # run, so a single burst at a fixed offset is a coin flip -- and it lost every
+  # time: ["<spacebar><spacebar>"] at boot_wait=5s fired before the prompt was up,
+  # the window expired, and the VM fell through to "BdsDxe: No bootable option or
+  # device was found". That is why no Windows ISO template had ever built.
+  #
+  # Type a key once a second for ~45s instead, so the prompt cannot be missed
+  # whatever POST costs. Keys before the prompt are dropped; keys after it are
+  # absorbed by Setup, which is driven entirely by the answer file. Worst case
+  # this adds a minute to an hour-long build.
+  boot_command = [
+    # Phase 1 -- get past "Press any key to boot from CD or DVD" (~5s window at
+    # an unpredictable offset). Spacebar is deliberately non-committal so it
+    # cannot pick anything by accident if a menu is already up.
+    join("", [for _i in range(45) : "<spacebar><wait>"]),
+    # Phase 2 -- those keystrokes also cancel Windows Boot Manager's auto-select
+    # countdown, which then parks on "Windows Setup [EMS Enabled]" FOREVER
+    # waiting for ENTER (confirmed on the console: the menu was still up when
+    # boot_command finished, and the build would have burned the full 90m WinRM
+    # timeout there). Commit the highlighted entry explicitly. Harmless if the
+    # menu already advanced -- Setup absorbs the keys, the answer file drives it.
+    "<wait5><enter><wait5><enter>",
+  ]
 
   communicator   = "winrm"
   winrm_username = local.build_username
@@ -136,6 +180,17 @@ source "proxmox-iso" "windows_server_2025_core" {
 
 build {
   sources = ["source.proxmox-iso.windows_server_2025_core"]
+  # FIRST, before anything else - including Windows Update. The bootstrap
+  # scripts exit 0 by design (a non-zero exit from a first-logon command aborts
+  # the logon sequence) and record their verdict in marker files; this reads
+  # them. It has to run before the update pass or a broken bootstrap is only
+  # discovered ~35 minutes later, which defeats the point of failing fast.
+  provisioner "powershell" {
+    scripts = [
+      "${path.root}/../common/scripts/04-assert-bootstrap-clean.ps1",
+    ]
+  }
+
 
   # Fully patch the image FIRST so ISO templates ship current and the rest of
   # the config lands on a patched OS (cleanup stays last). The rgl plugin drives
@@ -154,18 +209,27 @@ build {
     ]
   }
 
-  # Initial post-install workflow. Expand this list as the template hardens.
+  # Post-install workflow. This list is deliberately IDENTICAL across every
+  # Windows image -- ISO and cloud, Core and Desktop Experience -- so a template
+  # differs only in how it was installed, never in what it contains. Scripts all
+  # live in builds/windows/common/scripts; there are no per-build copies.
   provisioner "powershell" {
     scripts = [
-      "${path.root}/scripts/03-install-virtio-guest-tools.ps1",
-      "${path.root}/scripts/30-ConfigureRemotingForAnsible.ps1",
-      "${path.root}/scripts/31-ansible-winrm-enablecredssp.ps1",
-      "${path.root}/scripts/11-enable-icmp.ps1",
-      "${path.root}/scripts/20-set-temp.ps1",
-      "${path.root}/scripts/90-customization.ps1",
-      "${path.root}/scripts/998-cleanup.ps1",
-      # NOTE: sysprep will break WinRM connectivity; keep disabled until the rest of the flow is stable.
-      # "${path.root}/scripts/999-sysprep.ps1",
+      "${path.root}/../common/scripts/11-install-lab-ca.ps1",
+      "${path.root}/../common/scripts/20-enable-rdp.ps1",
+      "${path.root}/../common/scripts/21-enable-openssh.ps1",
+      "${path.root}/../common/scripts/22-enable-icmp.ps1",
+      "${path.root}/../common/scripts/23-enable-ems-serial.ps1",
+      "${path.root}/../common/scripts/24-configure-winrm-for-ansible.ps1",
+      "${path.root}/../common/scripts/30-set-temp.ps1",
+      "${path.root}/../common/scripts/53-install-winget.ps1",
+      "${path.root}/../common/scripts/60-install-cloudbase-init.ps1",
+      "${path.root}/../common/scripts/80-bginfo.ps1",
+      "${path.root}/../common/scripts/81-customization.ps1",
+      "${path.root}/../common/scripts/998-cleanup.ps1",
+      # NOTE: sysprep breaks WinRM connectivity; it must be the final provisioner
+      # and stays disabled until the rest of the flow is proven.
+      # "${path.root}/../common/scripts/999-sysprep.ps1",
     ]
   }
 }

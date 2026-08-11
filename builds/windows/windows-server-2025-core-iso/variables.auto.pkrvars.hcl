@@ -20,3 +20,9 @@ vm_id = 9401
 
 # Pin Core explicitly so this build cannot drift if the shared default changes.
 windows_image_index = 1
+
+# Build and land this template on the NFS datastore rather than the node's
+# local-lvm thin pool. local-lvm sits ~86% full with 48 volumes on it, and an
+# 80G Windows build is a poor neighbour there; nas-datastore01 has ~10.6TB free
+# and is NFS 4.2, so discard=on in the build can actually reclaim space.
+storage_pool = "nas-datastore01"
