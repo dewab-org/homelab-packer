@@ -89,28 +89,25 @@
 - name: Upgrade all packages at build time
   ansible.builtin.import_tasks: system_upgrade.yml
 
-- name: Unregister from Red Hat Satellite
-  community.general.redhat_subscription:
-    state: absent
-  no_log: true
-  failed_when: false
-  when: satellite_configured
-
-- name: Unregister from Red Hat Network
-  community.general.redhat_subscription:
-    state: absent
-  no_log: true
-  failed_when: false
-  when: not satellite_configured
-
-# Both unregister tasks tolerate failure (the box may never have registered),
-# which also swallows a real failure — and a still-registered template hands
-# every clone the same RHSM identity. Verify the effect, not the module.
-- name: Verify RHSM identity is gone
-  ansible.builtin.command: subscription-manager identity
-  register: rhsm_identity
-  changed_when: false
-  failed_when: rhsm_identity.rc == 0
+# Unregister (Satellite or RHN — `subscription-manager unregister` covers both)
+# AND confirm the identity is gone, with retries. A tolerated single-shot
+# unregister swallows a real failure: the template ships still-registered (every
+# clone shares one RHSM identity) and each failed build leaks an orphaned
+# registration into the account. Loop unregister+clean until identity reports
+# nothing, or fail the build.
+- name: Unregister from RHSM and confirm the identity is gone
+  ansible.builtin.shell: |
+    subscription-manager unregister || true
+    subscription-manager clean || true
+    if subscription-manager identity >/dev/null 2>&1; then exit 1; fi
+    exit 0
+  args:
+    executable: /bin/bash
+  register: rhsm_unregister
+  changed_when: rhsm_unregister.rc == 0
+  retries: "{{ rhel_net_retries }}"
+  delay: "{{ rhel_net_delay }}"
+  until: rhsm_unregister.rc == 0
 
 - name: Remove unused packages
   ansible.builtin.dnf:

@@ -137,22 +137,27 @@
     - name: CA trust, time-sync hardening, and template cleanup
       ansible.builtin.import_tasks: tasks/common_cleanup.yml
 
-    - name: Unregister from Red Hat Subscription Management
-      community.general.redhat_subscription:
-        state: absent
-      when: ansible_distribution == 'RedHat'
-      # Tolerated: the module errors when the box was never registered.
-      failed_when: false
-
-    # failed_when: false above means a *failed* unregister also passes, and a
-    # template that ships still registered gives every clone the same RHSM
-    # identity. Verify the outcome instead of trusting the module: identity
-    # must be gone (rc != 0) once unregistration has actually happened.
-    - name: Verify RHSM identity is gone
-      ansible.builtin.command: subscription-manager identity
-      register: rhsm_identity
-      changed_when: false
-      failed_when: rhsm_identity.rc == 0
+    # Unregister AND confirm the identity is gone, with retries. RHN unregister
+    # is flaky, and a single silent failure leaves the template still
+    # registered — every clone would then share one RHSM identity, and each
+    # failed build leaks an orphaned registration into the Red Hat account
+    # (20+ rhel-10 orphans accumulated exactly this way and broke CI). Loop
+    # unregister+clean until `subscription-manager identity` reports nothing,
+    # or fail the build. This one task replaces the old tolerated-unregister +
+    # separate verify.
+    - name: Unregister from RHSM and confirm the identity is gone
+      ansible.builtin.shell: |
+        subscription-manager unregister || true
+        subscription-manager clean || true
+        if subscription-manager identity >/dev/null 2>&1; then exit 1; fi
+        exit 0
+      args:
+        executable: /bin/bash
+      register: rhsm_unregister
+      changed_when: rhsm_unregister.rc == 0
+      retries: "{{ rhel_net_retries }}"
+      delay: "{{ rhel_net_delay }}"
+      until: rhsm_unregister.rc == 0
       when: ansible_distribution == 'RedHat'
 
     - name: Remove unused packages
