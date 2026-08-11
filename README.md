@@ -164,9 +164,9 @@ breaks it too), so the Windows allocation is an explicit table:
 
 | Build | ISO | cloud-base | cloud |
 | --- | --- | --- | --- |
-| Server 2022 Core | *(ISO-only, see below)* | 9421 | 9431 |
+| Server 2022 Core | *(ISO-only, see below)* | 9421 *(planned — no Core VHD)* | 9431 *(planned — no Core VHD)* |
 | Server 2022 Desktop Experience | — | 9422 | 9432 |
-| Server 2025 Core | 9401 | 9423 | 9433 |
+| Server 2025 Core | 9401 | 9423 *(planned — no Core VHD)* | 9433 *(planned — no Core VHD)* |
 | Server 2025 Desktop Experience | 9403 | 9424 | 9434 |
 
 `9402` is intentionally free. An early Server 2025 desktop-experience build
