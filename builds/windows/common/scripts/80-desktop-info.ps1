@@ -28,9 +28,11 @@
 #   1. Skips loudly on Server Core, which has no desktop to paint.
 #   2. Writes C:\ProgramData\DesktopInfo\Update-DesktopInfo.ps1, which renders
 #      the wallpaper from live system state.
-#   3. Runs it once now, so the template itself has a correct wallpaper.
+#   3. Runs it once now to a throwaway path, purely to prove the renderer
+#      works while the build log is still watching, then deletes the output.
 #   4. Registers the 'Desktop-Info-Refresh' scheduled task with an AT LOGON
-#      trigger so the wallpaper is REDRAWN for whoever logs on.
+#      trigger so the wallpaper is REDRAWN for whoever logs on, into THAT
+#      user's LOCALAPPDATA.
 #
 # WHY A LOGON TASK AND NOT A STATIC IMAGE
 #   The same trap as the WinRM certificate: anything rendered at build time
@@ -76,6 +78,9 @@ $ProgressPreference = "SilentlyContinue"
 
 $infoDir = 'C:\ProgramData\DesktopInfo'
 $renderer = Join-Path $infoDir 'Update-DesktopInfo.ps1'
+# The shared path the renderer USED to write to. Kept only so the build can
+# assert nothing is left there - see the removal below. The real bitmap lives
+# in each user's LOCALAPPDATA.
 $bitmap = Join-Path $infoDir 'desktopinfo.bmp'
 $taskName = 'Desktop-Info-Refresh'
 
@@ -130,13 +135,27 @@ try {
 ###############################################################################
 [CmdletBinding()]
 param(
-    [string]$OutputPath = 'C:\ProgramData\DesktopInfo\desktopinfo.bmp'
+    # Defaults PER-USER, and that is load-bearing. This runs at logon under a
+    # LIMITED token (see the principal on the scheduled task). A file created
+    # by SYSTEM under C:\ProgramData cannot be overwritten by that token -
+    # ProgramData's inherited ACL lets Users CREATE files but not modify ones
+    # another principal owns. Writing the shared path would therefore throw at
+    # every single logon, and the desktop would keep displaying whatever the
+    # TEMPLATE rendered: wrong hostname, wrong IP, wrong disks, all looking
+    # perfectly authoritative. Per-user also matches what a wallpaper is.
+    [string]$OutputPath
 )
 
 $ErrorActionPreference = 'Stop'
+
+if (-not $OutputPath) {
+    $base = $env:LOCALAPPDATA
+    if (-not $base) { $base = Join-Path $env:SystemRoot 'Temp' }
+    $OutputPath = Join-Path $base 'DesktopInfo\desktopinfo.bmp'
+}
 Add-Type -AssemblyName System.Drawing
 
-function Get-InfoLines {
+function Get-InfoLineList {
     $lines = New-Object System.Collections.Generic.List[string]
 
     $os = Get-CimInstance Win32_OperatingSystem
@@ -216,7 +235,7 @@ function Get-InfoLines {
     return $lines
 }
 
-function New-InfoBitmap {
+function Write-InfoBitmap {
     param(
         [Parameter(Mandatory = $true)][string[]]$Lines,
         [Parameter(Mandatory = $true)][string]$Path
@@ -250,7 +269,7 @@ public static extern bool SystemParametersInfo(uint uiAction, uint uiParam, stri
 "@
 
 New-Item -ItemType Directory -Force -Path (Split-Path $OutputPath -Parent) | Out-Null
-New-InfoBitmap -Lines (Get-InfoLines) -Path $OutputPath
+Write-InfoBitmap -Lines (Get-InfoLineList) -Path $OutputPath
 
 if (-not (Test-Path -LiteralPath $OutputPath)) { throw "bitmap was not written to $OutputPath" }
 if ((Get-Item -LiteralPath $OutputPath).Length -lt 10240) {
@@ -275,19 +294,37 @@ Write-Output "desktop info rendered to $OutputPath and applied"
     }
     Write-Host "Wrote renderer: $renderer"
 
-    # Render once now so the template itself is correct, and so a broken
-    # renderer fails HERE rather than silently at some future logon.
-    Write-Host "Rendering the wallpaper once to prove the renderer works"
-    & powershell.exe -NoProfile -NonInteractive -ExecutionPolicy Bypass -File $renderer
+    # Render once now so a broken renderer fails HERE, loudly, in the build log
+    # rather than silently at some future logon on someone else's clone.
+    #
+    # Deliberately to a THROWAWAY path, then deleted. Do NOT render to the real
+    # per-user path during the build: this provisioner runs elevated, so the
+    # file would be owned by SYSTEM, and the limited-token logon task could
+    # never overwrite it. That would turn a working design into a template that
+    # shows the BUILD VM's identity on every clone forever. The render is a
+    # proof that the code runs, nothing more - the real bitmap is the logon
+    # task's job, on the machine whose details it is describing.
+    $proof = Join-Path $env:SystemRoot 'Temp\desktopinfo-buildcheck.bmp'
+    Remove-Item -LiteralPath $proof -Force -ErrorAction SilentlyContinue
+    Write-Host "Rendering once to $proof to prove the renderer works"
+    & powershell.exe -NoProfile -NonInteractive -ExecutionPolicy Bypass -File $renderer -OutputPath $proof
 
-    if (-not (Test-Path -LiteralPath $bitmap)) {
-        throw "The renderer ran but produced no bitmap at $bitmap"
+    if (-not (Test-Path -LiteralPath $proof)) {
+        throw "The renderer ran but produced no bitmap at $proof"
     }
-    $size = (Get-Item -LiteralPath $bitmap).Length
+    $size = (Get-Item -LiteralPath $proof).Length
     if ($size -lt 10240) {
         throw "The rendered bitmap is implausibly small ($size bytes); it would show as a blank wallpaper"
     }
-    Write-Host "  verified bitmap: $bitmap ($([math]::Round($size / 1KB)) KB)"
+    Write-Host "  verified renderer output: $proof ($([math]::Round($size / 1KB)) KB)"
+    Remove-Item -LiteralPath $proof -Force -ErrorAction SilentlyContinue
+
+    # Leave NO bitmap at the shared path. If one is there, a limited user cannot
+    # replace it, and the stale copy is what everyone would see.
+    if (Test-Path -LiteralPath $bitmap) {
+        Write-Host "  removing stale shared-path bitmap: $bitmap"
+        Remove-Item -LiteralPath $bitmap -Force
+    }
 
     # AT LOGON, in the logging-on user's context: the wallpaper is a per-user
     # setting, so a SYSTEM task could render the image but not apply it.
