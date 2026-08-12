@@ -324,9 +324,25 @@ try {
     if ($LASTEXITCODE -ne 0) {
         throw "powercfg /setactive $HighPerformanceGuid failed with exit code $LASTEXITCODE (is the High Performance scheme present on this edition?)"
     }
+    # Native tools can return NOTHING when run from Packer's elevated_user
+    # provisioner, because that is a scheduled task with no console attached.
+    # bcdedit was observed doing exactly this in 23-enable-ems-serial.ps1; an
+    # empty read here would fail the GUID comparison below and blame the power
+    # plan for what is really a capture problem. Retry through cmd.exe, which
+    # supplies a console, before believing the emptiness.
     $activeScheme = (& powercfg.exe /getactivescheme) -join ' '
     if ($LASTEXITCODE -ne 0) {
         throw "powercfg /getactivescheme failed with exit code $LASTEXITCODE"
+    }
+    if ([string]::IsNullOrWhiteSpace($activeScheme)) {
+        Write-Host "powercfg /getactivescheme returned nothing; retrying via cmd.exe (no console in an elevated task)"
+        $activeScheme = (& cmd.exe /c 'powercfg.exe /getactivescheme') -join ' '
+        if ($LASTEXITCODE -ne 0) {
+            throw "powercfg /getactivescheme (via cmd.exe) failed with exit code $LASTEXITCODE"
+        }
+        if ([string]::IsNullOrWhiteSpace($activeScheme)) {
+            throw "powercfg /getactivescheme returned no output even via cmd.exe, so the active power plan could not be read back"
+        }
     }
     if ($activeScheme -notmatch [regex]::Escape($HighPerformanceGuid)) {
         throw "Power plan verification failed - active scheme is '$activeScheme', expected GUID $HighPerformanceGuid"

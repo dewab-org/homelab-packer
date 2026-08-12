@@ -226,10 +226,23 @@ function Get-ChannelRecordCount {
     # Note: stderr is discarded rather than merged - merging native stderr into
     # the success stream raises NativeCommandError under $ErrorActionPreference
     # = 'Stop' in Windows PowerShell. The exit code is the signal here.
+    # An elevated scheduled task has no console, and native tools have been
+    # observed returning nothing in that context (see 23-enable-ems-serial.ps1,
+    # where bcdedit did exactly this). An empty read here would be counted as an
+    # unreadable channel and reported as a cleanup FAILURE, blaming the event
+    # log for what is really a capture problem. Retry through cmd.exe first.
     $info = @(& wevtutil.exe gli "$Channel" 2>$null)
     if ($LASTEXITCODE -ne 0) {
         Write-Host "  wevtutil gli '$Channel' exited $LASTEXITCODE"
         return -1
+    }
+    if ($info.Count -eq 0 -or ($info -join '').Trim() -eq '') {
+        Write-Host "  wevtutil gli '$Channel' returned nothing; retrying via cmd.exe"
+        $info = @(& cmd.exe /c "wevtutil.exe gli `"$Channel`"" 2>$null)
+        if ($LASTEXITCODE -ne 0 -or $info.Count -eq 0) {
+            Write-Host "  wevtutil gli '$Channel' returned nothing even via cmd.exe"
+            return -1
+        }
     }
 
     foreach ($line in @($info)) {
