@@ -12,16 +12,18 @@ packer {
 }
 
 locals {
-  proxmox_url      = var.proxmox_url != null ? var.proxmox_url : vault("secret/data/packer", "PROXMOX_URL")
-  proxmox_user     = var.proxmox_user != null ? var.proxmox_user : vault("secret/data/packer", "PROXMOX_USERNAME")
-  proxmox_password = var.proxmox_password != null ? var.proxmox_password : vault("secret/data/packer", "PROXMOX_PASSWORD")
-  proxmox_node     = var.proxmox_node != null ? var.proxmox_node : vault("secret/data/packer", "PROXMOX_NODE")
-  storage_pool     = var.storage_pool != null ? var.storage_pool : vault("secret/data/packer", "PROXMOX_STORAGE")
-  iso_storage_pool = var.iso_storage_pool != null ? var.iso_storage_pool : vault("secret/data/packer", "PROXMOX_ISO_STORAGE")
-  build_username   = var.build_username != null ? var.build_username : vault("secret/data/packer", "BUILD_USERNAME")
-  build_password   = var.build_password != null ? var.build_password : vault("secret/data/packer", "BUILD_PASSWORD")
-  use_iso_file     = var.iso_file != null && var.iso_file != ""
-  cd_label         = "PACKER"
+  proxmox_url                 = var.proxmox_url != null ? var.proxmox_url : vault("secret/data/packer", "PROXMOX_URL")
+  proxmox_user                = var.proxmox_user != null ? var.proxmox_user : vault("secret/data/packer", "PROXMOX_USERNAME")
+  proxmox_password            = var.proxmox_password != null ? var.proxmox_password : vault("secret/data/packer", "PROXMOX_PASSWORD")
+  proxmox_node                = var.proxmox_node != null ? var.proxmox_node : vault("secret/data/packer", "PROXMOX_NODE")
+  storage_pool                = var.storage_pool != null ? var.storage_pool : vault("secret/data/packer", "PROXMOX_STORAGE")
+  iso_storage_pool            = var.iso_storage_pool != null ? var.iso_storage_pool : vault("secret/data/packer", "PROXMOX_ISO_STORAGE")
+  build_username              = var.build_username != null ? var.build_username : vault("secret/data/packer", "BUILD_USERNAME")
+  build_password              = var.build_password != null ? var.build_password : vault("secret/data/packer", "BUILD_PASSWORD")
+  use_iso_file                = var.iso_file != null && var.iso_file != ""
+  cloudbase_init_url_env      = var.cloudbase_init_url != null ? var.cloudbase_init_url : ""
+  cloudbase_init_checksum_env = var.cloudbase_init_checksum != null ? var.cloudbase_init_checksum : ""
+  cd_label                    = "PACKER"
 
   autounattend_xml = templatefile("files/autounattend.pkrtpl.xml", {
     win_language        = var.win_language
@@ -224,6 +226,13 @@ build {
     # failure the cloud build's comment had been describing for months.
     elevated_user     = local.build_username
     elevated_password = local.build_password
+
+    # 60-install-cloudbase-init.ps1 reads these; it throws when the URL is
+    # empty rather than shipping a template whose clones never self-configure.
+    environment_vars = [
+      "CLOUDBASE_INIT_URL=${local.cloudbase_init_url_env}",
+      "CLOUDBASE_INIT_CHECKSUM=${local.cloudbase_init_checksum_env}",
+    ]
 
     scripts = [
       "${path.root}/../common/scripts/11-install-lab-ca.ps1",
