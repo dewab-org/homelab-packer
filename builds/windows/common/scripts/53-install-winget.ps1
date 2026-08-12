@@ -1,9 +1,9 @@
 ###############################################################################
 # Name:             53-install-winget.ps1
-# Description:      Provisions winget per-machine (the App Installer msixbundle
-#                   plus its VCLibs dependency), proves a real winget.exe
-#                   exists and runs, then installs eleven applications with it
-#                   and confirms each one with `winget list`.
+# Description:      Stages winget per-machine (the App Installer msixbundle
+#                   plus its VCLibs dependency) and verifies a real winget.exe
+#                   exists. It deliberately does NOT run winget - see WHY THIS
+#                   DOES NOT RUN WINGET.
 # Author:           Daniel Whicker
 # Date:             2021-10-28
 ###############################################################################
@@ -19,15 +19,38 @@
 #      GitHub), each with Add-AppxProvisionedPackage -Online -SkipLicense.
 #      Provisioning errors are recorded rather than swallowed, and are
 #      reprinted only if the assertion in step 4 fails.
-#   4. Asserts winget.exe is now resolvable, then runs `winget --version`.
-#   5. Installs each id with `winget install --id <id> --exact --silent
-#      --accept-package-agreements --accept-source-agreements
-#      --disable-interactivity`: 7zip.7zip, Git.Git, Google.Chrome,
-#      JAMSoftware.TreeSize.Free, Microsoft.RemoteDesktopConnectionManager,
-#      Microsoft.Sysinternals.BGInfo, Microsoft.Sysinternals.ProcessExplorer,
-#      Microsoft.VisualStudioCode, Microsoft.WindowsTerminal, Mozilla.Firefox,
-#      Notepad++.Notepad++.
-#   6. Aggregates every failure and reports them together at the end.
+#   4. Asserts a real winget.exe is resolvable, and stops there.
+#
+# WHY THIS DOES NOT RUN WINGET
+#   Established by experiment on a clone, not assumed. Two separate findings:
+#
+#   1. A package staged with Add-AppxProvisionedPackage is registered for a
+#      user at that user's NEXT LOGON. Packer runs each script in an elevated
+#      provisioner as its own scheduled task, so staging and first use in one
+#      script share a single logon: the binary is on disk and resolvable but
+#      not registered for the session trying to launch it. Staging and running
+#      'winget --version' in ONE task fails with "Access is denied"; running it
+#      in a SECOND task, nothing else changed, exits 0.
+#
+#   2. 'winget install' does not work in this context AT ALL, even from a
+#      second logon where 'winget --version' succeeds. Start-Process -Wait
+#      -PassThru returns an EMPTY ExitCode, stdout and stderr are empty, and
+#      the package is verifiably absent afterwards. winget's install path
+#      requires an interactive user session; a Packer provisioner runs in a
+#      non-interactive session-0 batch logon.
+#
+#   Together those two are a trap rather than an inconvenience: the bare call
+#   operator never sets $LASTEXITCODE for this MSIX-packaged app, so the
+#   obvious 'if ($LASTEXITCODE -ne 0) { fail }' compares against $null, passes,
+#   and reports success for an install that did nothing. An earlier version of
+#   this script installed eleven applications this way. It had never once run
+#   to completion on any image, so the silent-success path was never reached -
+#   the loud failure in finding 1 masked it.
+#
+#   The package list now lives in 56-install-winget-packages.ps1, which is
+#   library code for interactive use and is NOT part of any build. Software
+#   that must be baked into a template needs a direct installer - see
+#   55-install-non-choco-software.ps1.
 #
 # WHAT IT VERIFIES
 #   - Each download exists, meets a minimum size (100KB for VCLibs, 1MB for
@@ -39,35 +62,21 @@
 #     Microsoft.DesktopAppInstaller_*_x64__8wekyb3d8bbwe, highest version
 #     first. The Get-Command fallback REJECTS a zero-byte hit: what PATH
 #     usually finds is the AppExecutionAlias reparse stub in
-#     %LOCALAPPDATA%\Microsoft\WindowsApps, which does not execute in a
-#     non-interactive Packer session and would fail confusingly later.
-#   - `winget --version` exits 0 before the binary is trusted with a package
-#     list.
-#   - Per package: the install exit code is acceptable AND
-#     `winget list --id <id> --exact` exits 0 - it exits non-zero when nothing
-#     matches, which is what catches an install that reported success and
-#     landed nothing.
+#     %LOCALAPPDATA%\Microsoft\WindowsApps, which is not a runnable binary.
 #
 # FAILURE CONTRACT
 #   LOUD SKIP : Server Core. It has no Appx servicing stack, so
 #               Add-AppxProvisionedPackage fails with "The specified module
 #               could not be found" regardless of how the payload is fetched.
-#               The script prints a banner saying NO winget and NO packages
-#               were installed, and exits 0. Failing here would discard a
-#               fully patched template over a Desktop Experience component the
-#               platform cannot host - and the package list is GUI software a
-#               Core install could not display in any case.
+#               The script prints a banner saying NO winget was staged and
+#               exits 0. Failing here would discard a fully patched template
+#               over a Desktop Experience component the platform cannot host.
 #   FATAL     : a payload download is missing, under its minimum size, or not
-#               a 'PK' container; winget.exe cannot be found after
+#               a 'PK' container; or winget.exe cannot be found after
 #               provisioning (the error reprints any provisioning errors plus
-#               the platform explanation below); `winget --version` exits
-#               non-zero; any package fails its install exit code or its
-#               `winget list` check. Accepted install exit codes are 0, 3010
-#               (reboot required), -1978335189 (0x8A15002B, no applicable
-#               update) and -1978335135 (0x8A150061, already installed).
-#   LOUD SKIP : none. Provisioning errors on their own are non-fatal and are
-#               logged as a NOTE, but only when winget.exe still resolves
-#               afterwards.
+#               the platform explanation below).
+#   NON-FATAL : provisioning errors on their own, logged as a NOTE, but only
+#               when winget.exe still resolves afterwards.
 #
 # INPUTS (environment)
 #   PACKER_DEBUG_HOLD   when set, sleeps 3600s on failure so the transcript
@@ -75,10 +84,9 @@
 #                       default.
 #
 # NOTES
-#   - WIRED IN: this is the only script in the 40-70 range that any build
-#     references. It runs in all four ISO builds (Server 2022 and 2025, Core
-#     and Desktop Experience) and in common/cloud-clone-build.pkr.hcl. Note
-#     that the package list is GUI software and is installed on Core too.
+#   - WIRED IN: runs in all four ISO builds (Server 2022 and 2025, Core and
+#     Desktop Experience) and in common/cloud-clone-build.pkr.hcl. It stages
+#     winget only; no build installs software through it.
 #   - KNOWN PLATFORM LIMITATION (documented, not a config bug):
 #     Add-AppxPackage FAILS inside a Packer provisioner session with HRESULT
 #     0x80073D19 ("a user was logged off") - the remote/scheduled-task session
@@ -96,6 +104,9 @@
 #   - $PSNativeCommandUseErrorActionPreference is disabled so PowerShell 7.4+
 #     does not turn a non-zero native exit into a terminating error and bypass
 #     the explicit $LASTEXITCODE checks. No-op on Windows PowerShell 5.1.
+#   - Staging is per-machine, so every user who logs on gets a working winget
+#     without this script ever having run it. That is the deliverable: winget
+#     PRESENT on the image. Using it is a runtime activity, not a build one.
 ###############################################################################
 
 $ErrorActionPreference = 'Stop'
@@ -105,20 +116,6 @@ $ProgressPreference = 'SilentlyContinue'
 # while $ErrorActionPreference is 'Stop', which would bypass the explicit
 # $LASTEXITCODE checks below. Harmless no-op on Windows PowerShell 5.1.
 $PSNativeCommandUseErrorActionPreference = $false
-
-$WingetPackages = @(
-    '7zip.7zip',
-    'Git.Git',
-    'Google.Chrome',
-    'JAMSoftware.TreeSize.Free',
-    'Microsoft.RemoteDesktopConnectionManager',
-    'Microsoft.Sysinternals.BGInfo',
-    'Microsoft.Sysinternals.ProcessExplorer',
-    'Microsoft.VisualStudioCode',
-    'Microsoft.WindowsTerminal',
-    'Mozilla.Firefox',
-    'Notepad++.Notepad++'
-)
 
 # Dependencies must be provisioned before the App Installer bundle itself.
 $WingetPayload = @(
@@ -136,12 +133,6 @@ $WingetPayload = @(
     }
 )
 
-# winget exit codes that are not failures:
-#   0           success
-#   3010        success, reboot required
-#   -1978335189 0x8A15002B no applicable update
-#   -1978335135 0x8A150061 package already installed
-$AcceptableExitCodes = @(0, 3010, -1978335189, -1978335135)
 
 $AppxFailureExplanation = @'
 winget.exe could not be found after provisioning the App Installer package.
@@ -343,39 +334,54 @@ try {
 
     $winget = Install-Winget
 
-    # Prove the binary actually runs before trusting it with a package list.
-    & $winget --version | Out-Null
-    if ($LASTEXITCODE -ne 0) {
-        throw "$winget exists but 'winget --version' exited $LASTEXITCODE."
-    }
+    # DO NOT INVOKE winget HERE. This is the whole point of the script's shape,
+    # and it was established by experiment on a clone rather than assumed:
+    #
+    #   E1  stage the package and run 'winget --version' in ONE elevated
+    #       scheduled task  -> "Access is denied"
+    #   E2  run 'winget --version' in a SECOND task, nothing else changed
+    #       -> exit 0
+    #
+    # Add-AppxProvisionedPackage stages an MSIX for a user at that user's NEXT
+    # logon. Packer runs each script in an elevated provisioner as its own
+    # scheduled task, so staging and first use inside one script share a single
+    # logon and the package is on disk but not yet registered for the session
+    # trying to launch it. That is exactly the failure this build hit: the path
+    # check passed, printed "Verified winget is present", and the next line
+    # died. Anything that needs to RUN winget belongs in a later script.
+    #
+    # A second, independent finding from the same experiment - relevant to
+    # anyone tempted to add an install loop back here:
+    #
+    #   'winget install' DOES NOT WORK in this context AT ALL, even from a
+    #   second logon where 'winget --version' succeeds. Start-Process -Wait
+    #   -PassThru returned an EMPTY ExitCode with empty stdout and stderr, and
+    #   the package was verifiably not installed afterwards. winget's install
+    #   path requires an interactive user session; Packer's non-interactive
+    #   session-0 batch logon is not one.
+    #
+    # Note what that combination would have done to a naive check: the bare
+    # call operator never sets $LASTEXITCODE for this MSIX-packaged app, so
+    # 'if ($LASTEXITCODE -ne 0) { fail }' compares against $null, passes, and
+    # reports success for an install that did nothing. Build-time package
+    # installation via winget is not available - see
+    # 56-install-winget-packages.ps1 for the package list and the contexts
+    # where it can actually be used.
 
-    $failures = New-Object System.Collections.Generic.List[string]
-
-    foreach ($packageId in $WingetPackages) {
-        Write-Host "Installing $packageId"
-        & $winget install --id $packageId --exact --silent `
-            --accept-package-agreements --accept-source-agreements --disable-interactivity
-
-        if ($AcceptableExitCodes -notcontains $LASTEXITCODE) {
-            $failures.Add("$packageId (winget exit code $LASTEXITCODE)")
-            continue
-        }
-
-        # Verify the effect: 'winget list' exits non-zero when nothing matches.
-        & $winget list --id $packageId --exact --disable-interactivity --accept-source-agreements | Out-Null
-        if ($LASTEXITCODE -ne 0) {
-            $failures.Add("$packageId (install exited 0 but 'winget list' cannot find it)")
-            continue
-        }
-
-        Write-Host "Verified $packageId is installed"
-    }
-
-    if ($failures.Count -gt 0) {
-        throw "$($failures.Count) of $($WingetPackages.Count) winget packages failed: $($failures -join '; ')"
-    }
-
-    Write-Host "All $($WingetPackages.Count) winget packages installed and verified."
+    Write-Host ""
+    Write-Host "winget is staged for this machine."
+    Write-Host "  binary : $winget"
+    Write-Host ""
+    Write-Host "It is deliberately NOT executed during the build: a package staged"
+    Write-Host "with Add-AppxProvisionedPackage is only registered for a user at that"
+    Write-Host "user's next logon, so it cannot run in the same session that staged it."
+    Write-Host "Any logon on the finished template gets a working winget."
+    Write-Host ""
+    Write-Host "NO packages were installed by this script, and none can be: winget's"
+    Write-Host "install path needs an interactive session, which a Packer provisioner"
+    Write-Host "is not. Software that must be baked into the template has to come from"
+    Write-Host "a direct installer - see 55-install-non-choco-software.ps1."
+    Write-Host ""
     exit 0
 }
 catch {
