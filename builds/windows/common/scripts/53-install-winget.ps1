@@ -49,6 +49,14 @@
 #     landed nothing.
 #
 # FAILURE CONTRACT
+#   LOUD SKIP : Server Core. It has no Appx servicing stack, so
+#               Add-AppxProvisionedPackage fails with "The specified module
+#               could not be found" regardless of how the payload is fetched.
+#               The script prints a banner saying NO winget and NO packages
+#               were installed, and exits 0. Failing here would discard a
+#               fully patched template over a Desktop Experience component the
+#               platform cannot host - and the package list is GUI software a
+#               Core install could not display in any case.
 #   FATAL     : a payload download is missing, under its minimum size, or not
 #               a 'PK' container; winget.exe cannot be found after
 #               provisioning (the error reprints any provisioning errors plus
@@ -219,6 +227,38 @@ function Get-AppxPayload {
     Write-Host "Downloaded $($Payload.name) ($size bytes)"
 }
 
+function Test-AppxServicingAvailable {
+    # Server Core ships without the Appx servicing stack, so
+    # Add-AppxProvisionedPackage fails there with "The specified module could
+    # not be found" no matter how the payload is fetched. That is a platform
+    # boundary, not a bug to work around: winget is a Desktop Experience
+    # component and the packages it would install here are GUI applications
+    # that a Core install has no way to display.
+    [CmdletBinding()]
+    [OutputType([bool])]
+    param()
+
+    $installationType = $null
+    try {
+        $installationType = (Get-ItemProperty -LiteralPath 'HKLM:\SOFTWARE\Microsoft\Windows NT\CurrentVersion' `
+                -Name 'InstallationType' -ErrorAction Stop).InstallationType
+    }
+    catch {
+        Write-Host "Could not read InstallationType ($($_.Exception.Message)); assuming Appx is available."
+        return $true
+    }
+
+    Write-Host "Windows InstallationType: $installationType"
+    if ($installationType -eq 'Server Core') { return $false }
+
+    # Belt and braces: even on a full Server install, the cmdlet has to exist.
+    if (-not (Get-Command Add-AppxProvisionedPackage -ErrorAction SilentlyContinue)) {
+        Write-Host "Add-AppxProvisionedPackage is not available on this image."
+        return $false
+    }
+    return $true
+}
+
 function Install-Winget {
     $existing = Get-WingetPath
     if ($existing) {
@@ -280,6 +320,27 @@ New-Item -ItemType Directory -Force -Path 'C:/Install' | Out-Null
 Start-Transcript -Path 'C:/Install/53-install-winget.txt' -Append
 
 try {
+    # LOUD SKIP on Server Core. Not a silent no-op: the banner states plainly
+    # that no packages were installed, so a transcript can never be misread as
+    # "winget configured". Failing the build instead would throw away a fully
+    # patched template over a component the platform cannot host.
+    if (-not (Test-AppxServicingAvailable)) {
+        Write-Host ""
+        Write-Host "*******************************************************************"
+        Write-Host "*** SKIPPED: winget is NOT available on this image"
+        Write-Host "***"
+        Write-Host "*** Server Core has no Appx servicing stack, so"
+        Write-Host "*** Add-AppxProvisionedPackage cannot deploy the App Installer"
+        Write-Host "*** bundle. NO winget and NO packages were installed."
+        Write-Host "***"
+        Write-Host "*** This is a platform boundary, not a build failure: winget is a"
+        Write-Host "*** Desktop Experience component, and the package list here is GUI"
+        Write-Host "*** software a Core install could not display anyway."
+        Write-Host "*******************************************************************"
+        Write-Host ""
+        exit 0
+    }
+
     $winget = Install-Winget
 
     # Prove the binary actually runs before trusting it with a package list.
