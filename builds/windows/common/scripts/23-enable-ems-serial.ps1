@@ -12,7 +12,9 @@
 # WHAT IT DOES
 #   1. Creates C:\Install and opens a transcript at
 #      C:\Install\23-enable-ems-serial.txt.
-#   2. Defines Invoke-BcdEdit, which runs bcdedit.exe and throws on a
+#   2. Defines Invoke-BcdEdit, which runs bcdedit.exe, retries a /enum that
+#      comes back empty via cmd.exe (an elevated scheduled task has no console
+#      and bcdedit has been seen producing nothing there), and throws on a
 #      non-zero $LASTEXITCODE (bcdedit does not throw and does not honour
 #      $ErrorActionPreference), and Get-BcdElementValue, which scrapes a
 #      named element's value out of 'bcdedit /enum' text.
@@ -79,14 +81,44 @@ Start-Transcript -Path 'C:/Install/23-enable-ems-serial.txt' -Append
 
 function Invoke-BcdEdit {
     [CmdletBinding()]
+    # 2>&1 can yield ErrorRecords, so the static type is object[] even though
+    # every element is stringified on the way out.
+    [OutputType([object[]])]
     param(
         [Parameter(Mandatory = $true)]
-        [string[]]$Arguments
+        [string[]]$Arguments,
+
+        # Set to $true for /enum queries, whose output is the whole point.
+        [switch]$ExpectOutput
     )
 
-    $output = & bcdedit.exe @Arguments
-    if ($LASTEXITCODE -ne 0) {
-        throw ("bcdedit " + ($Arguments -join ' ') + " failed with exit code ${LASTEXITCODE}:`n" + ($output -join "`n"))
+    $output = @(& bcdedit.exe @Arguments 2>&1 | ForEach-Object { "$_" })
+    $code = $LASTEXITCODE
+    if ($code -ne 0) {
+        throw ("bcdedit " + ($Arguments -join ' ') + " failed with exit code ${code}:`n" + ($output -join "`n"))
+    }
+
+    # /enum queries MUST produce output; a set operation legitimately produces
+    # little or none. An empty /enum is not a parse problem, it is a failed
+    # read, and it has to say so here rather than surfacing downstream as
+    # "Cannot bind argument ... because it is an empty string".
+    #
+    # It happens for real: under Packer's elevated_user provisioner the script
+    # runs from a scheduled task with no console attached, and bcdedit has been
+    # observed returning nothing there while the same command works
+    # interactively. Re-running it through cmd.exe gives it a console and the
+    # output comes back, so that is the fallback rather than a hard failure.
+    if ($ExpectOutput -and ($output.Count -eq 0 -or ($output -join '').Trim() -eq '')) {
+        Write-Host "  bcdedit $($Arguments -join ' ') returned no output; retrying via cmd.exe (no console in an elevated task)"
+        $joined = ($Arguments | ForEach-Object { $_ }) -join ' '
+        $output = @(& cmd.exe /c "bcdedit.exe $joined" 2>&1 | ForEach-Object { "$_" })
+        $code = $LASTEXITCODE
+        if ($code -ne 0) {
+            throw ("bcdedit " + $joined + " (via cmd.exe) failed with exit code ${code}:`n" + ($output -join "`n"))
+        }
+        if ($output.Count -eq 0 -or ($output -join '').Trim() -eq '') {
+            throw ("bcdedit " + $joined + " returned no output even via cmd.exe, so the BCD store could not be read back. EMS cannot be verified.")
+        }
     }
     return $output
 }
@@ -96,6 +128,7 @@ function Get-BcdElementValue {
     param(
         [Parameter(Mandatory = $true)]
         [AllowEmptyCollection()]
+        [AllowEmptyString()]
         [string[]]$EnumOutput,
 
         [Parameter(Mandatory = $true)]
@@ -114,14 +147,14 @@ try {
     Invoke-BcdEdit -Arguments @('/emssettings', 'EMSPORT:1', 'EMSBAUDRATE:115200') | Out-Null
 
     # Verify the effect: EMS enabled on the OS loader entry.
-    $current = Invoke-BcdEdit -Arguments @('/enum', '{current}')
+    $current = Invoke-BcdEdit -Arguments @('/enum', '{current}') -ExpectOutput
     $ems = Get-BcdElementValue -EnumOutput $current -Element 'ems'
     if ($ems -ne 'Yes') {
         throw ("EMS not enabled on {current} (ems=" + $ems + "):`n" + ($current -join "`n"))
     }
 
     # Verify the effect: EMS enabled on the boot manager.
-    $bootmgr = Invoke-BcdEdit -Arguments @('/enum', '{bootmgr}')
+    $bootmgr = Invoke-BcdEdit -Arguments @('/enum', '{bootmgr}') -ExpectOutput
     $bootems = Get-BcdElementValue -EnumOutput $bootmgr -Element 'bootems'
     if ($bootems -ne 'Yes') {
         throw ("bootems not enabled on {bootmgr} (bootems=" + $bootems + "):`n" + ($bootmgr -join "`n"))
@@ -130,7 +163,7 @@ try {
     # Verify the effect: the actual port and baud rate, not just the presence
     # of the word 'emsport' - bcdedit prints emsport with a default value even
     # when nothing was applied.
-    $settings = Invoke-BcdEdit -Arguments @('/enum', '{emssettings}')
+    $settings = Invoke-BcdEdit -Arguments @('/enum', '{emssettings}') -ExpectOutput
     $emsPort = Get-BcdElementValue -EnumOutput $settings -Element 'emsport'
     $emsBaud = Get-BcdElementValue -EnumOutput $settings -Element 'emsbaudrate'
     if ($emsPort -ne '1') {
