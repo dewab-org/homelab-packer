@@ -57,6 +57,13 @@ source "proxmox-iso" "windows_server_2022_core" {
   memory   = 8192
   numa     = true
 
+  # Proxmox ostype. Without it the template lands as "other", which costs the
+  # Windows-specific guest optimisations (hv enlightenments and friends) and
+  # makes tests/clone-verify.py take its LINUX path, because it branches on
+  # ostype.startswith("win") - so it tried to SSH into a Windows box. The
+  # working cloud templates use win10 for Server 2022 and win11 for 2025.
+  os = "win10"
+
   machine = "q35"
   bios    = "ovmf"
   efi_config {
