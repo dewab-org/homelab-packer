@@ -241,7 +241,7 @@ build {
       "${path.root}/../common/scripts/30-set-temp.ps1",
       "${path.root}/../common/scripts/53-install-winget.ps1",
       "${path.root}/../common/scripts/60-install-cloudbase-init.ps1",
-      "${path.root}/../common/scripts/80-bginfo.ps1",
+      "${path.root}/../common/scripts/80-desktop-info.ps1",
       "${path.root}/../common/scripts/81-customization.ps1",
       "${path.root}/../common/scripts/998-cleanup.ps1",
       # NOTE: sysprep will break WinRM connectivity; keep disabled until the rest of the flow is stable.

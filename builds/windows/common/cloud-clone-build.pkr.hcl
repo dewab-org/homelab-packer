@@ -214,14 +214,15 @@ build {
       // installing nothing.
       "${path.root}/../common/scripts/53-install-winget.ps1",
       "${path.root}/../common/scripts/60-install-cloudbase-init.ps1",
-      // 80-bginfo was previously omitted because it expected Bginfo64.exe to
-      // have been installed by Chocolatey (which these templates do not use)
-      // and this lab has no egress to Sysinternals. It now pulls the binary
-      // from upstream on every build, with a winget fallback and an optional
-      // lab-mirror override. It is cosmetic, so if every source fails it skips
-      // LOUDLY and the build still succeeds -- wallpaper is not worth failing a
-      // fully-patched template over.
-      "${path.root}/../common/scripts/80-bginfo.ps1",
+      // 80-desktop-info replaced 80-bginfo. BGInfo needed a binary .bgi config
+      // that only its GUI can author, hosted behind a lab share token that had
+      // been committed to git, plus a Sysinternals download this VLAN could not
+      // reliably reach. The same fields are a dozen lines of PowerShell, so it
+      // is now plain text in-repo with no download and no token. It renders at
+      // every LOGON, not once at build time: a wallpaper baked into a template
+      // would confidently display the BUILD VM's hostname, IP and disks on
+      // every clone.
+      "${path.root}/../common/scripts/80-desktop-info.ps1",
       "${path.root}/../common/scripts/81-customization.ps1",
       "${path.root}/../common/scripts/998-cleanup.ps1",
       // sysprep breaks WinRM; keep it last and disabled until the flow is proven.
