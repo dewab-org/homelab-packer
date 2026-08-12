@@ -139,7 +139,7 @@ function Invoke-PathPurge {
         [Parameter(Mandatory = $true)][string]$Path,
         [string[]]$ExcludeName = @(),
         [string[]]$Include = @(),
-        [string]$ProtectPath
+        [string[]]$ProtectPath = @()
     )
 
     $result = [pscustomobject]@{
@@ -161,12 +161,34 @@ function Invoke-PathPurge {
     # access-denied children are normal here) but on its own it is a silent
     # no-op generator: a directory that could not be read at all looks exactly
     # like an empty one. Capture the errors so the caller can say which.
+    # OBSERVED: the "installers only" purge of C:\Install removed 16 items -
+    # far more than the handful of installers present - and then failed on
+    # C:\Install\998-cleanup.txt, this script's OWN OPEN TRANSCRIPT, which it
+    # promises to keep. That was recorded as an ESSENTIAL failure and killed the
+    # build.
+    #
+    # The -Include filter therefore did not filter on that guest (Windows
+    # PowerShell 5.1). The exact mechanism is NOT proven: the same
+    # -LiteralPath/-Include/-Recurse combination filters correctly under
+    # PowerShell 7.5, which is all that could be tested here, and -Include has
+    # well-known path-dependent behaviour that differs between 5.1 and 7.x.
+    #
+    # Rather than depend on which reading is right, filter explicitly with
+    # Where-Object: it behaves identically on both, and cannot be quietly
+    # ignored by a parameter-binding rule. The transcript is ALSO protected by
+    # name at the call site, so the failure cannot recur even if the filter is
+    # somehow bypassed again.
     $enumErrors = @()
+    $items = @(Get-ChildItem -LiteralPath $Path -Force -Recurse:$($Include.Count -gt 0) -ErrorAction SilentlyContinue -ErrorVariable +enumErrors)
     if ($Include.Count -gt 0) {
-        $items = @(Get-ChildItem -LiteralPath $Path -Force -Include $Include -Recurse -ErrorAction SilentlyContinue -ErrorVariable +enumErrors)
-    }
-    else {
-        $items = @(Get-ChildItem -LiteralPath $Path -Force -ErrorAction SilentlyContinue -ErrorVariable +enumErrors)
+        $items = @($items | Where-Object {
+                $name = $_.Name
+                $matched = $false
+                foreach ($pattern in $Include) {
+                    if ($name -like $pattern) { $matched = $true; break }
+                }
+                $matched
+            })
     }
     $result.EnumErrors = @($enumErrors).Count
     if ($result.EnumErrors -gt 0) {
@@ -185,10 +207,14 @@ function Invoke-PathPurge {
 
         # Never delete the script that is currently executing, nor the
         # directory it lives in - Packer runs provisioners out of Temp.
-        if (-not $skip -and $ProtectPath -and $ProtectPath.StartsWith($item.FullName, [System.StringComparison]::OrdinalIgnoreCase)) {
-            $skip = $true
+        if (-not $skip) {
+            foreach ($protected in $ProtectPath) {
+                if ($protected -and $protected.StartsWith($item.FullName, [System.StringComparison]::OrdinalIgnoreCase)) {
+                    $skip = $true
+                    break
+                }
+            }
         }
-
         if ($skip) {
             $result.Skipped++
             continue
@@ -259,6 +285,10 @@ $warnings = New-Object System.Collections.Generic.List[string]
 $transcriptStarted = $false
 $exitCode = 0
 $runningScript = $PSCommandPath
+# This script's own transcript is OPEN while it runs, so it can never be
+# deleted; attempting it produced an ESSENTIAL cleanup failure and killed a
+# build. Protect it explicitly rather than relying on the include filter.
+$cleanupTranscript = 'C:\Install\998-cleanup.txt'
 $totalRemoved = 0
 
 function Register-PurgeResult {
@@ -425,7 +455,7 @@ try {
     # template. Transcripts (*.txt) are NOT in $installerPatterns.
     Write-Host "Removing downloaded installers from C:\Install..."
     Register-PurgeResult -Label "downloaded installers" -Essential -Result (
-        Invoke-PathPurge -Path "C:\Install" -Include $installerPatterns -ProtectPath $runningScript)
+        Invoke-PathPurge -Path "C:\Install" -Include $installerPatterns -ProtectPath @($runningScript, $cleanupTranscript))
 
     $installerLeftovers = @(Get-ChildItem -Path "C:\Install" -Force -Recurse -Include $installerPatterns -ErrorAction SilentlyContinue)
     if ($installerLeftovers.Count -gt 0) {
