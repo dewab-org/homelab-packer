@@ -44,10 +44,19 @@ packer {
 }
 
 locals {
-  proxmox_url                 = var.proxmox_url != null ? var.proxmox_url : vault("secret/data/packer", "PROXMOX_URL")
-  proxmox_user                = var.proxmox_user != null ? var.proxmox_user : vault("secret/data/packer", "PROXMOX_USERNAME")
-  proxmox_password            = var.proxmox_password != null ? var.proxmox_password : vault("secret/data/packer", "PROXMOX_PASSWORD")
-  proxmox_node                = var.proxmox_node != null ? var.proxmox_node : vault("secret/data/packer", "PROXMOX_NODE")
+  proxmox_url      = var.proxmox_url != null ? var.proxmox_url : vault("secret/data/packer", "PROXMOX_URL")
+  proxmox_user     = var.proxmox_user != null ? var.proxmox_user : vault("secret/data/packer", "PROXMOX_USERNAME")
+  proxmox_password = var.proxmox_password != null ? var.proxmox_password : vault("secret/data/packer", "PROXMOX_PASSWORD")
+  proxmox_node     = var.proxmox_node != null ? var.proxmox_node : vault("secret/data/packer", "PROXMOX_NODE")
+
+  # API TOKEN, not username+password. A password login mints a ticket that
+  # expires after 2 HOURS, and a Windows build takes 2h02m - so the session
+  # died exactly at teardown/template-conversion, the most expensive possible
+  # moment. It surfaced as "401 Authentication failed!" while Packer tried to
+  # stop and delete the VM, which then STRANDED the VM and its disk. API tokens
+  # do not expire, so the last minutes of a long build are no longer a race.
+  proxmox_token_id            = vault("secret/data/packer", "PROXMOX_TOKEN_ID")
+  proxmox_token_secret        = vault("secret/data/packer", "PROXMOX_TOKEN_SECRET")
   storage_pool                = var.storage_pool != null ? var.storage_pool : vault("secret/data/packer", "PROXMOX_STORAGE")
   iso_storage_pool            = var.iso_storage_pool != null ? var.iso_storage_pool : vault("secret/data/packer", "PROXMOX_ISO_STORAGE")
   build_username              = var.build_username != null ? var.build_username : vault("secret/data/packer", "BUILD_USERNAME")
@@ -70,8 +79,8 @@ locals {
 
 source "proxmox-clone" "windows_cloud" {
   proxmox_url              = local.proxmox_url
-  username                 = local.proxmox_user
-  password                 = local.proxmox_password
+  username                 = local.proxmox_token_id
+  token                    = local.proxmox_token_secret
   node                     = local.proxmox_node
   insecure_skip_tls_verify = true
 

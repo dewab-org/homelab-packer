@@ -212,20 +212,27 @@ function Get-InfoLineList {
     $lines.Add("")
 
     # Fixed disks: size, free and percentage used.
-    $volumes = @(Get-Volume -ErrorAction SilentlyContinue |
-            Where-Object { $_.DriveType -eq 'Fixed' -and $_.DriveLetter } |
-            Sort-Object DriveLetter)
+    #
+    # Win32_LogicalDisk, NOT Get-Volume. Get-Volume goes through the Storage
+    # WMI provider, which a LIMITED token cannot enumerate - it returns nothing
+    # and no error, so the wallpaper rendered "Disks : (none)" on a machine with
+    # a perfectly healthy 80GB C:. That is the failure mode this whole script
+    # exists to avoid: a confident-looking answer that is simply wrong. The
+    # logon task runs limited by design, so the data source has to work there.
+    # Win32_LogicalDisk is readable by standard users. DriveType 3 = local disk.
+    $volumes = @(Get-CimInstance -ClassName Win32_LogicalDisk -Filter 'DriveType=3' -ErrorAction SilentlyContinue |
+            Sort-Object DeviceID)
     if ($volumes.Count -eq 0) {
-        $lines.Add("Disks        : (none)")
+        $lines.Add("Disks        : (none found - check the token this ran under)")
     }
     else {
         $first = $true
         foreach ($v in $volumes) {
             $sizeGB = [math]::Round($v.Size / 1GB, 1)
-            $freeGB = [math]::Round($v.SizeRemaining / 1GB, 1)
-            $usedPct = if ($v.Size -gt 0) { [math]::Round((($v.Size - $v.SizeRemaining) / $v.Size) * 100) } else { 0 }
+            $freeGB = [math]::Round($v.FreeSpace / 1GB, 1)
+            $usedPct = if ($v.Size -gt 0) { [math]::Round((($v.Size - $v.FreeSpace) / $v.Size) * 100) } else { 0 }
             $label = if ($first) { "Disks        : " } else { "               " }
-            $lines.Add(("{0}{1}: {2} GB total, {3} GB free ({4}% used)" -f $label, $v.DriveLetter, $sizeGB, $freeGB, $usedPct))
+            $lines.Add(("{0}{1} {2} GB total, {3} GB free ({4}% used)" -f $label, $v.DeviceID, $sizeGB, $freeGB, $usedPct))
             $first = $false
         }
     }
@@ -237,7 +244,13 @@ function Get-InfoLineList {
 
 function Write-InfoBitmap {
     param(
-        [Parameter(Mandatory = $true)][string[]]$Lines,
+        # AllowEmptyString is REQUIRED, not decoration. A Mandatory [string[]]
+        # rejects an array that contains an empty element with "Cannot bind
+        # argument to parameter 'Lines' because it is an empty string" - and
+        # the layout below uses "" for the blank separator lines between the
+        # host block, the network block and the disk block. Without this the
+        # renderer dies on every machine. It did.
+        [Parameter(Mandatory = $true)][AllowEmptyString()][string[]]$Lines,
         [Parameter(Mandatory = $true)][string]$Path
     )
 
@@ -249,9 +262,13 @@ function Write-InfoBitmap {
         $gfx.Clear([System.Drawing.Color]::FromArgb(16, 24, 32))
         $font = New-Object System.Drawing.Font('Consolas', 18, [System.Drawing.FontStyle]::Regular)
         $brush = New-Object System.Drawing.SolidBrush([System.Drawing.Color]::FromArgb(220, 230, 240))
+        # Start well clear of the desktop icon column on the left. At x=60 the
+        # first characters of every line sat UNDERNEATH the icons and their
+        # labels, which is how the first render came out.
+        $x = 620.0
         $y = 60.0
         foreach ($line in $Lines) {
-            $gfx.DrawString($line, $font, $brush, 60.0, $y)
+            $gfx.DrawString($line, $font, $brush, $x, $y)
             $y += 30.0
         }
         $gfx.Flush()
