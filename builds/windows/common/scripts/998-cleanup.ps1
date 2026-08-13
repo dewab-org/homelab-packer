@@ -30,10 +30,16 @@
 # WHAT IT VERIFIES
 #   - The Windows Update download cache is re-scanned and must be empty (or
 #     absent) afterwards - it is the single biggest consumer.
-#   - The Application / System / Setup channels are re-read with
-#     `wevtutil gli`; an unreadable count is a failure, and more than 50
-#     records means the clear did not take. (A handful reappear immediately
-#     because clearing is itself audited.)
+#   - `wevtutil cl` returning 0 is the authoritative proof a channel cleared,
+#     and an essential channel refusing to clear is FATAL.
+#   - The Application / System / Setup channels are additionally counted with
+#     `wevtutil gli` BEFORE and AFTER, as a secondary check. An unreadable count
+#     is a failure. Beyond that, only the impossible case is fatal: records
+#     accumulate, so a channel with a real backlog that did not shrink AT ALL
+#     was not cleared. Residual counts are otherwise reported, never judged -
+#     clearing is itself audited and the OS keeps logging, so the residue tracks
+#     how busy the image is, not whether the clear worked (measured on one
+#     machine in one run: System 313 -> 4, Application 117 -> 73, both exit 0).
 #   - C:\Install is re-scanned for installer patterns; any leftover is named.
 #   - EVERY purge returns a tally - removed / skipped / failed / ENUMERATION
 #     ERRORS - and all of it is folded into the summary. The enumeration count
@@ -50,7 +56,8 @@
 # FAILURE CONTRACT
 #   FATAL     : exits 1 when any ESSENTIAL item fails - `wevtutil el`
 #               returning nothing; Application/System/Setup refusing to clear,
-#               reporting an unreadable count, or still holding >50 records;
+#               reporting an unreadable count, or failing to shrink at all from
+#               a backlog of more than 50 records;
 #               the Windows Update download cache failing to purge, failing to
 #               enumerate, or still containing items; the C:\Install installer
 #               purge failing or leaving installer files behind; or any
@@ -118,6 +125,38 @@ $installerPatterns = @("*.msi", "*.msu", "*.exe", "*.appx", "*.appxbundle", "*.m
 # Event log channels that MUST come out clean. Everything else wevtutil
 # reports is cleared best-effort (analytic/debug channels routinely refuse).
 $essentialChannels = @("Application", "System", "Setup")
+
+function Invoke-WevtUtil {
+    <#
+        .SYNOPSIS
+        Runs wevtutil through cmd.exe with stderr discarded BY CMD.
+
+        .DESCRIPTION
+        Not a style choice. Under $ErrorActionPreference = 'Stop', Windows
+        PowerShell 5.1 turns a native command's redirected stderr into
+        ErrorRecords, and the first one becomes a TERMINATING NativeCommandError
+        - so `& wevtutil.exe cl $name 2>$null` throws the moment wevtutil
+        complains, no matter what the surrounding code intended to do with the
+        exit code.
+
+        That is exactly how this script died on Desktop Experience. Analytic and
+        Debug channels cannot be cleared and wevtutil says so on stderr; the
+        Microsoft-Windows-LiveId/Analytic channel exists on Desktop Experience
+        but not on Core, which is why Core cleared all 653 channels while
+        Desktop Experience aborted the whole build at the very last provisioner.
+        The "refused channels are fine" logic below was correct and never got
+        the chance to run.
+
+        Redirecting inside cmd.exe means PowerShell never sees the stderr at
+        all, so $LASTEXITCODE can be judged on its merits.
+    #>
+    [CmdletBinding()]
+    [OutputType([object[]])]
+    param([Parameter(Mandatory = $true)][string]$Arguments)
+
+    $output = @(& cmd.exe /c "wevtutil.exe $Arguments 2>nul")
+    return $output
+}
 
 function Get-FreeSpace {
     [CmdletBinding()]
@@ -254,21 +293,22 @@ function Get-ChannelRecordCount {
     # = 'Stop' in Windows PowerShell. The exit code is the signal here.
     # An elevated scheduled task has no console, and native tools have been
     # observed returning nothing in that context (see 23-enable-ems-serial.ps1,
-    # where bcdedit did exactly this). An empty read here would be counted as an
-    # unreadable channel and reported as a cleanup FAILURE, blaming the event
-    # log for what is really a capture problem. Retry through cmd.exe first.
-    $info = @(& wevtutil.exe gli "$Channel" 2>$null)
+    # where bcdedit did exactly this). An empty read here is reported as an
+    # unreadable channel rather than silently treated as zero records.
+    #
+    # There used to be a "retry through cmd.exe" branch here for that case. It
+    # is gone because Invoke-WevtUtil now goes through cmd.exe on the FIRST
+    # call, so the retry was re-running an identical command and could only ever
+    # produce an identical result. A retry that cannot change the outcome is
+    # worse than none: it reads like a safety net and is not one.
+    $info = Invoke-WevtUtil -Arguments "gli `"$Channel`""
     if ($LASTEXITCODE -ne 0) {
         Write-Host "  wevtutil gli '$Channel' exited $LASTEXITCODE"
         return -1
     }
     if ($info.Count -eq 0 -or ($info -join '').Trim() -eq '') {
-        Write-Host "  wevtutil gli '$Channel' returned nothing; retrying via cmd.exe"
-        $info = @(& cmd.exe /c "wevtutil.exe gli `"$Channel`"" 2>$null)
-        if ($LASTEXITCODE -ne 0 -or $info.Count -eq 0) {
-            Write-Host "  wevtutil gli '$Channel' returned nothing even via cmd.exe"
-            return -1
-        }
+        Write-Host "  wevtutil gli '$Channel' returned no output"
+        return -1
     }
 
     foreach ($line in @($info)) {
@@ -358,23 +398,32 @@ try {
     # Get-EventLog / Clear-EventLog do not exist in PowerShell 7 and only ever
     # covered a handful of classic logs. wevtutil enumerates every channel.
     Write-Host "Clearing Event Logs..."
-    $channels = @(& wevtutil.exe el 2>$null)
+    $channels = Invoke-WevtUtil -Arguments "el"
     if ($LASTEXITCODE -ne 0 -or $channels.Count -eq 0) {
         $failures.Add("wevtutil el failed (exit $LASTEXITCODE) - no event log channels enumerated")
     }
     else {
+        # Baseline BEFORE clearing, so the verification below can prove the
+        # clear took effect instead of guessing from an absolute number.
+        $preClearCounts = @{}
+        foreach ($name in $essentialChannels) {
+            $preClearCounts[$name] = Get-ChannelRecordCount -Channel $name
+        }
+
         $cleared = 0
         $refused = 0
+        $refusedNames = New-Object System.Collections.Generic.List[string]
         foreach ($channel in $channels) {
             $name = "$channel".Trim()
             if (-not $name) { continue }
 
-            & wevtutil.exe cl "$name" 2>$null
+            Invoke-WevtUtil -Arguments "cl `"$name`"" | Out-Null
             if ($LASTEXITCODE -eq 0) {
                 $cleared++
             }
             else {
                 $refused++
+                $refusedNames.Add($name)
                 if ($essentialChannels -contains $name) {
                     $failures.Add("wevtutil cl '$name' exited $LASTEXITCODE")
                 }
@@ -382,19 +431,53 @@ try {
         }
         Write-Host "  Channels enumerated: $($channels.Count), cleared: $cleared, refused: $refused"
         if ($refused -gt 0) {
-            $warnings.Add("$refused event log channels refused to clear (analytic/debug channels normally do)")
+            # Name them. "2 channels refused" is untriageable; the names show at
+            # a glance whether these are the usual analytic/debug channels or
+            # something that actually matters.
+            $shown = ($refusedNames | Select-Object -First 8) -join ', '
+            if ($refusedNames.Count -gt 8) { $shown += ", ..." }
+            $warnings.Add("$refused event log channels refused to clear (analytic/debug channels normally do): $shown")
         }
 
-        # VERIFY: a cleared channel must report (near) zero records. A handful
-        # of records reappear immediately because clearing is itself audited.
+        # VERIFY. Read this before tightening it again - it has been wrong twice.
+        #
+        # The authoritative signal that a channel was cleared is `wevtutil cl`
+        # returning 0, and that IS gated above: an essential channel refusing to
+        # clear is a FATAL failure. What follows is a secondary sanity check,
+        # and it has to stay secondary, because the residual record count is
+        # inherently racy.
+        #
+        # Attempt 1 failed any channel holding >50 records after the clear. That
+        # is not a measurement of whether the clear worked. Clearing is itself
+        # audited and the OS keeps logging, so records reappear immediately and
+        # the number depends on how busy the machine is. Core came in under 50;
+        # Desktop Experience hit 100 and failed a healthy build at the last
+        # provisioner, two hours in.
+        #
+        # Attempt 2 required a 90% drop. Also wrong, and measured wrong on the
+        # same machine in the same run: System went 313 -> 4 while Application
+        # went 117 -> 73. Both returned exit 0. Application is simply written to
+        # constantly, so most of its 73 records postdate the clear.
+        #
+        # What is left is the one thing that cannot innocently happen: records
+        # only ever accumulate, so a channel that had a real backlog and did NOT
+        # shrink at all was not cleared. Everything else is reported, not
+        # judged - the counts are printed either way so a human can see them.
         foreach ($name in $essentialChannels) {
+            $before = $preClearCounts[$name]
             $count = Get-ChannelRecordCount -Channel $name
-            Write-Host "  Channel '$name' record count after clear: $count"
+            Write-Host "  Channel '$name' records: $before before clear, $count after"
+
             if ($count -lt 0) {
-                $failures.Add("Could not read record count for event log channel '$name'")
+                $failures.Add("Could not read record count for event log channel '$name' - the clear cannot be verified either way")
+                continue
             }
-            elseif ($count -gt 50) {
-                $failures.Add("Event log channel '$name' still holds $count records after clear")
+            if ($before -gt 50 -and $count -ge $before) {
+                $failures.Add("Event log channel '$name' did not shrink at all ($before -> $count) despite wevtutil reporting success - the clear did not take effect")
+                continue
+            }
+            if ($before -gt 0 -and $count -gt [int]($before / 2)) {
+                $warnings.Add("Event log channel '$name' still holds $count of its original $before records; expected on a busy image, since clearing is itself audited")
             }
         }
     }

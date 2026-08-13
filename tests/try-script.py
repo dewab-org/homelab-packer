@@ -106,9 +106,28 @@ class Guest:
         pid = self._qemu().agent.exec.post(
             command=["powershell.exe", "-NoProfile", "-NonInteractive",
                      "-ExecutionPolicy", "Bypass", "-EncodedCommand", enc])["pid"]
+        # Poll with tolerance. The guest agent intermittently misses a
+        # guest-exec-status call while the guest is busy and PVE surfaces it as
+        # "500 ... qga command 'guest-exec-status' failed - got timeout". The
+        # STATUS call is idempotent, so retrying it is safe and correct.
+        #
+        # Only the poll is retried, never the exec itself: re-running a command
+        # that may already have taken effect is how you end up appending a
+        # base64 chunk twice and corrupting the file being uploaded.
         end = time.time() + timeout
+        consecutive_errors = 0
         while time.time() < end:
-            r = self._qemu().agent("exec-status").get(pid=pid)
+            try:
+                r = self._qemu().agent("exec-status").get(pid=pid)
+                consecutive_errors = 0
+            except Exception as exc:
+                consecutive_errors += 1
+                if consecutive_errors >= 10:
+                    raise RuntimeError(
+                        f"guest agent stopped answering after {consecutive_errors} "
+                        f"consecutive errors: {exc}")
+                time.sleep(5)
+                continue
             if r.get("exited"):
                 return r.get("exitcode", -1), (r.get("out-data") or ""), (r.get("err-data") or "")
             time.sleep(3)
@@ -120,7 +139,7 @@ class Guest:
         data = base64.b64encode(open(local_path, "rb").read()).decode()
         self.ps(f"Remove-Item -LiteralPath '{remote_path}' -Force -ErrorAction SilentlyContinue;"
                 f"New-Item -ItemType Directory -Force -Path (Split-Path '{remote_path}') | Out-Null")
-        chunk, b64file = 3000, remote_path + ".b64"
+        chunk, b64file = 6000, remote_path + ".b64"
         for i in range(0, len(data), chunk):
             self.ps(f"Add-Content -LiteralPath '{b64file}' -Value '{data[i:i + chunk]}' -NoNewline")
         rc, out, err = self.ps(
