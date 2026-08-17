@@ -162,3 +162,15 @@ variable "virtio_iso_checksum" {
   description = "VirtIO ISO checksum (use 'none' to skip)"
   default     = env("VIRTIO_ISO_CHECKSUM") != "" ? env("VIRTIO_ISO_CHECKSUM") : "none"
 }
+
+variable "cloudbase_init_url" {
+  type        = string
+  description = "Optional Cloudbase-Init installer URL; when set, enable Proxmox cloud-init disk and install Cloudbase-Init"
+  default     = env("CLOUDBASE_INIT_URL") != "" ? env("CLOUDBASE_INIT_URL") : null
+}
+
+variable "cloudbase_init_checksum" {
+  type        = string
+  description = "Checksum for the Cloudbase-Init installer, e.g. sha256:..."
+  default     = env("CLOUDBASE_INIT_CHECKSUM") != "" ? env("CLOUDBASE_INIT_CHECKSUM") : null
+}

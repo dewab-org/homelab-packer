@@ -23,11 +23,11 @@
 //
 //   * No QEMU guest agent. Packer discovers the VM's IP by asking the agent, so
 //     without one the build waits on WinRM forever while the guest sits happily
-//     on a DHCP lease. 01-install-qemu-ga.ps1 installs it during bootstrap,
+//     on a DHCP lease. 00-install-qemu-ga.ps1 installs it during bootstrap,
 //     before WinRM is needed.
 //
 //   * No virtio drivers. The base therefore boots SATA + e1000; virtio is
-//     installed in-guest by 03-install-virtio-guest-tools.ps1, after which the
+//     installed in-guest by 10-install-virtio-guest-tools.ps1, after which the
 //     bus is switched by the post-processor (see switch_to_virtio).
 
 packer {
@@ -44,10 +44,19 @@ packer {
 }
 
 locals {
-  proxmox_url                 = var.proxmox_url != null ? var.proxmox_url : vault("secret/data/packer", "PROXMOX_URL")
-  proxmox_user                = var.proxmox_user != null ? var.proxmox_user : vault("secret/data/packer", "PROXMOX_USERNAME")
-  proxmox_password            = var.proxmox_password != null ? var.proxmox_password : vault("secret/data/packer", "PROXMOX_PASSWORD")
-  proxmox_node                = var.proxmox_node != null ? var.proxmox_node : vault("secret/data/packer", "PROXMOX_NODE")
+  proxmox_url      = var.proxmox_url != null ? var.proxmox_url : vault("secret/data/packer", "PROXMOX_URL")
+  proxmox_user     = var.proxmox_user != null ? var.proxmox_user : vault("secret/data/packer", "PROXMOX_USERNAME")
+  proxmox_password = var.proxmox_password != null ? var.proxmox_password : vault("secret/data/packer", "PROXMOX_PASSWORD")
+  proxmox_node     = var.proxmox_node != null ? var.proxmox_node : vault("secret/data/packer", "PROXMOX_NODE")
+
+  # API TOKEN, not username+password. A password login mints a ticket that
+  # expires after 2 HOURS, and a Windows build takes 2h02m - so the session
+  # died exactly at teardown/template-conversion, the most expensive possible
+  # moment. It surfaced as "401 Authentication failed!" while Packer tried to
+  # stop and delete the VM, which then STRANDED the VM and its disk. API tokens
+  # do not expire, so the last minutes of a long build are no longer a race.
+  proxmox_token_id            = vault("secret/data/packer", "PROXMOX_TOKEN_ID")
+  proxmox_token_secret        = vault("secret/data/packer", "PROXMOX_TOKEN_SECRET")
   storage_pool                = var.storage_pool != null ? var.storage_pool : vault("secret/data/packer", "PROXMOX_STORAGE")
   iso_storage_pool            = var.iso_storage_pool != null ? var.iso_storage_pool : vault("secret/data/packer", "PROXMOX_ISO_STORAGE")
   build_username              = var.build_username != null ? var.build_username : vault("secret/data/packer", "BUILD_USERNAME")
@@ -70,8 +79,8 @@ locals {
 
 source "proxmox-clone" "windows_cloud" {
   proxmox_url              = local.proxmox_url
-  username                 = local.proxmox_user
-  password                 = local.proxmox_password
+  username                 = local.proxmox_token_id
+  token                    = local.proxmox_token_secret
   node                     = local.proxmox_node
   insecure_skip_tls_verify = true
 
@@ -118,9 +127,9 @@ source "proxmox-clone" "windows_cloud" {
     cd_content = {
       "/bootstrap.cmd"                             = file("${path.root}/../common/files/bootstrap.cmd")
       "/bootstrap.ps1"                             = file("${path.root}/../common/files/bootstrap-vhd.ps1")
-      "/scripts/01-install-qemu-ga.ps1"            = file("${path.root}/../common/scripts/01-install-qemu-ga.ps1")
-      "/scripts/03-install-virtio-guest-tools.ps1" = file("${path.root}/../common/scripts/03-install-virtio-guest-tools.ps1")
-      "/scripts/02-enable-winrm.ps1"               = file("${path.root}/../common/scripts/02-enable-winrm.ps1")
+      "/scripts/00-install-qemu-ga.ps1"            = file("${path.root}/../common/scripts/00-install-qemu-ga.ps1")
+      "/scripts/10-install-virtio-guest-tools.ps1" = file("${path.root}/../common/scripts/10-install-virtio-guest-tools.ps1")
+      "/scripts/01-enable-winrm.ps1"               = file("${path.root}/../common/scripts/01-enable-winrm.ps1")
       "/root_ca_bundle.pem"                        = file("${path.root}/../common/files/root_ca_bundle.pem")
     }
     cd_label         = local.cd_label
@@ -131,7 +140,7 @@ source "proxmox-clone" "windows_cloud" {
   }
 
   // VirtIO drivers + guest tools, installed in-guest (no WinPE phase to inject
-  // them into). Left mounted so 03-install-virtio-guest-tools.ps1 can find it.
+  // them into). Left mounted so 10-install-virtio-guest-tools.ps1 can find it.
   additional_iso_files {
     iso_file = var.virtio_iso_file
     type     = "sata"
@@ -149,6 +158,17 @@ source "proxmox-clone" "windows_cloud" {
 
 build {
   sources = ["source.proxmox-clone.windows_cloud"]
+  # FIRST, before anything else - including Windows Update. The bootstrap
+  # scripts exit 0 by design (a non-zero exit from a first-logon command aborts
+  # the logon sequence) and record their verdict in marker files; this reads
+  # them. It has to run before the update pass or a broken bootstrap is only
+  # discovered ~35 minutes later, which defeats the point of failing fast.
+  provisioner "powershell" {
+    scripts = [
+      "${path.root}/../common/scripts/04-assert-bootstrap-clean.ps1",
+    ]
+  }
+
 
   # Fully patch the image FIRST so weekly builds ship current and the rest of
   # the config lands on a patched OS. The rgl plugin drives the Windows Update
@@ -180,33 +200,39 @@ build {
       "CLOUDBASE_INIT_CHECKSUM=${local.cloudbase_init_checksum_env}",
     ]
     scripts = [
-      // 03-install-virtio-guest-tools runs in bootstrap (pre-WinRM), not here:
+      // 10-install-virtio-guest-tools runs in bootstrap (pre-WinRM), not here:
       // the guest agent needs its virtio-serial driver before Packer can find
       // the VM at all. By this point the drivers are already installed.
-      "${path.root}/../common/scripts/05-install-lab-ca.ps1",
-      "${path.root}/../common/scripts/10-enable-rdp.ps1",
-      "${path.root}/../common/scripts/12-enable-openssh.ps1",
-      "${path.root}/../common/scripts/30-ConfigureRemotingForAnsible.ps1",
-      "${path.root}/../common/scripts/31-ansible-winrm-enablecredssp.ps1",
-      "${path.root}/../common/scripts/11-enable-icmp.ps1",
-      "${path.root}/../common/scripts/20-set-temp.ps1",
+      "${path.root}/../common/scripts/11-install-lab-ca.ps1",
+      "${path.root}/../common/scripts/20-enable-rdp.ps1",
+      "${path.root}/../common/scripts/21-enable-openssh.ps1",
+      "${path.root}/../common/scripts/22-enable-icmp.ps1",
+      "${path.root}/../common/scripts/23-enable-ems-serial.ps1",
+      "${path.root}/../common/scripts/24-configure-winrm-for-ansible.ps1",
       // EMS/SAC on COM1 so the serials=["socket"] device actually carries a
       // Windows console (self-verifies via bcdedit /enum).
-      "${path.root}/../common/scripts/15-enable-ems-serial.ps1",
-      // 59-install-winget deliberately omitted. It installs an Appx/MSIX
-      // package, which cannot deploy from the scheduled-task session that
-      // elevated_user creates (HRESULT 0x80073D19 "a user was logged off"),
-      // and Server 2022 lacks the Microsoft.WindowsAppRuntime framework the
-      // App Installer depends on. Both are platform limits, not config bugs.
-      // Install winget by hand on a clone if a specific test needs it.
+      "${path.root}/../common/scripts/30-set-temp.ps1",
+      // 53-install-winget was previously omitted here because Add-AppxPackage
+      // cannot deploy from the scheduled-task session elevated_user creates
+      // (HRESULT 0x80073D19 "a user was logged off"). The script now uses
+      // Add-AppxProvisionedPackage -Online instead, which works from a
+      // non-interactive/SYSTEM context, and asserts winget.exe resolves
+      // afterwards rather than assuming. Server 2022 still lacks the
+      // Microsoft.WindowsAppRuntime framework newer App Installer bundles want;
+      // if that bites, the script fails loudly saying so instead of silently
+      // installing nothing.
+      "${path.root}/../common/scripts/53-install-winget.ps1",
       "${path.root}/../common/scripts/60-install-cloudbase-init.ps1",
-      // 70-bginfo deliberately omitted: it downloads Bginfo64.exe from
-      // Sysinternals and this lab has no egress to it ("Bginfo64.exe not
-      // found" after the fetch silently produced nothing). It is cosmetic
-      // (desktop wallpaper), so it is dropped rather than mirrored. The same
-      // applies to cloudbase.it — see cloudbase_init_url in the vars file,
-      // which is NOT cosmetic and should be mirrored.
-      "${path.root}/../common/scripts/90-customization.ps1",
+      // 80-desktop-info replaced 80-bginfo. BGInfo needed a binary .bgi config
+      // that only its GUI can author, hosted behind a lab share token that had
+      // been committed to git, plus a Sysinternals download this VLAN could not
+      // reliably reach. The same fields are a dozen lines of PowerShell, so it
+      // is now plain text in-repo with no download and no token. It renders at
+      // every LOGON, not once at build time: a wallpaper baked into a template
+      // would confidently display the BUILD VM's hostname, IP and disks on
+      // every clone.
+      "${path.root}/../common/scripts/80-desktop-info.ps1",
+      "${path.root}/../common/scripts/81-customization.ps1",
       "${path.root}/../common/scripts/998-cleanup.ps1",
       // sysprep breaks WinRM; keep it last and disabled until the flow is proven.
       // "${path.root}/../common/scripts/999-sysprep.ps1",
