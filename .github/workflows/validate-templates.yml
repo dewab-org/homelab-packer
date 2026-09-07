@@ -24,7 +24,6 @@ jobs:
     timeout-minutes: 120
     env:
       VAULT_ADDR: ${{ vars.VAULT_ADDR }}
-      VAULT_TOKEN: ${{ secrets.VAULT_TOKEN }}
       VAULT_CACERT: /tmp/vault-ca.pem
       GITLEAKS_LICENSE: ${{ secrets.GITLEAKS_LICENSE }}
     steps:
@@ -46,7 +45,14 @@ jobs:
         run: |
           set -euo pipefail
           sudo apt-get update
-          sudo apt-get install -y --no-install-recommends ca-certificates libatomic1
+          sudo apt-get install -y --no-install-recommends ca-certificates libatomic1 unzip
+          # The vault CLI is only needed to log in below. Packer's own vault()
+          # function speaks HTTP and does not use it, which is why this job never
+          # installed it while it was handed a ready-made token.
+          vault_version="1.19.5"
+          curl -fsSLo /tmp/vault.zip "https://releases.hashicorp.com/vault/${vault_version}/vault_${vault_version}_linux_amd64.zip"
+          sudo unzip -o /tmp/vault.zip vault -d /usr/local/bin
+          sudo chmod 0755 /usr/local/bin/vault
           python -m venv .venv
           . .venv/bin/activate
           python -m pip install --upgrade pip
@@ -60,6 +66,23 @@ jobs:
           printf '%s' "${{ secrets.VAULT_CACERT }}" > /tmp/vault-ca.pem
           sudo install -m 0644 /tmp/vault-ca.pem /usr/local/share/ca-certificates/vault-viking-org.crt
           sudo update-ca-certificates
+
+      - name: Log in to Vault (Kubernetes auth)
+        shell: bash
+        run: |
+          set -euo pipefail
+          # See the same step in _build-test-template.yml for why this is not a
+          # stored token: the previous static secrets.VAULT_TOKEN expired on
+          # 2026-08-28 and took every scheduled build with it for two weeks.
+          # These runners are in-cluster, so they authenticate as themselves.
+          jwt="$(cat /var/run/secrets/kubernetes.io/serviceaccount/token)"
+          token="$(vault write -field=token auth/kubernetes/login \
+            role=packer-ci jwt="$jwt")"
+          echo "::add-mask::$token"
+          echo "VAULT_TOKEN=$token" >> "$GITHUB_ENV"
+          # Prove the policy grants the read, not just that login worked.
+          VAULT_TOKEN="$token" vault kv get -field=PROXMOX_URL secret/packer >/dev/null
+          echo "Vault login succeeded and secret/packer is readable."
 
       - name: Run pre-commit checks
         shell: bash

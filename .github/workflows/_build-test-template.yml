@@ -44,7 +44,6 @@ jobs:
     timeout-minutes: 300
     env:
       VAULT_ADDR: ${{ vars.VAULT_ADDR }}
-      VAULT_TOKEN: ${{ secrets.VAULT_TOKEN }}
       VAULT_CACERT: /tmp/vault-ca.pem
       PACKER_LOG: "1"
     steps:
@@ -79,6 +78,32 @@ jobs:
           printf '%s' "${{ secrets.VAULT_CACERT }}" > /tmp/vault-ca.pem
           sudo install -m 0644 /tmp/vault-ca.pem /usr/local/share/ca-certificates/vault-viking-org.crt
           sudo update-ca-certificates
+
+      - name: Log in to Vault (Kubernetes auth)
+        shell: bash
+        run: |
+          set -euo pipefail
+          # Kubernetes auth, NOT a stored token. These runners are in-cluster, so
+          # they prove who they are with their projected service-account token and
+          # Vault hands back a short-lived one. Nothing to rotate, and nothing that
+          # can quietly age out in a GitHub secret.
+          #
+          # That is not hypothetical. This replaced secrets.VAULT_TOKEN, a static
+          # token minted 2026-07-27 that died on Vault's default 768h TTL around
+          # 2026-08-28. Builds passed on 08-23; every scheduled build from 08-30
+          # onward failed at the first Vault read, for two weeks - a red scheduled
+          # run nobody watches is indistinguishable from no run at all.
+          # Same pattern as homelab.k8s-workloads/.github/workflows/helmfile-apply.yml.
+          jwt="$(cat /var/run/secrets/kubernetes.io/serviceaccount/token)"
+          token="$(vault write -field=token auth/kubernetes/login \
+            role=packer-ci jwt="$jwt")"
+          echo "::add-mask::$token"
+          echo "VAULT_TOKEN=$token" >> "$GITHUB_ENV"
+          # Prove the POLICY grants the read, not merely that login returned a
+          # token. A token with the wrong policy authenticates perfectly well and
+          # then fails at the first secret, deep into the job.
+          VAULT_TOKEN="$token" vault kv get -field=PROXMOX_URL secret/packer >/dev/null
+          echo "Vault login succeeded and secret/packer is readable."
 
       - name: Install build dependencies
         shell: bash
