@@ -1,0 +1,98 @@
+name: notify-matrix-fanout
+
+# The weekly fan-out (build-templates) runs on a GitHub-hosted runner ON PURPOSE
+# -- see the comment at the top of build-templates.yml: it must not occupy a
+# self-hosted runner that the builds it dispatches need. A GitHub-hosted runner
+# has no route to matrix.lab.local, so that workflow cannot announce its own
+# failure the way the others do. This watcher runs afterwards, on arc-runners,
+# and does it for them.
+#
+# The dispatched template-*-cloud pipelines each notify for themselves, so this
+# is not about their failures. It closes the one gap they cannot cover: the
+# fan-out failing WITHOUT dispatching anything - a bad input, a permissions
+# change, an API error - which means no builds ran at all and, without this,
+# nothing would say so.
+#
+# workflow_run only fires for workflows on the default branch, which is exactly
+# where the schedule runs.
+
+on:
+  workflow_run:
+    workflows: ["build-templates"]
+    types: [completed]
+
+permissions:
+  contents: read
+
+jobs:
+  notify:
+    name: Announce fan-out failure
+    if: github.event.workflow_run.conclusion == 'failure'
+    runs-on: arc-runners
+    timeout-minutes: 10
+    env:
+      VAULT_ADDR: ${{ vars.VAULT_ADDR }}
+    steps:
+      - name: Notify Matrix
+        shell: bash
+        env:
+          VAULT_CA: ${{ secrets.VAULT_CACERT }}
+          WF: build-templates (weekly fan-out)
+          REPO: ${{ github.repository }}
+          REF: ${{ github.event.workflow_run.head_branch }}
+          EVENT: ${{ github.event.workflow_run.event }}
+          TARGET: ""
+          RUN_URL: ${{ github.event.workflow_run.html_url }}
+        run: |
+          set -uo pipefail
+          # Same self-contained shape as the step in _build-test-template.yml.
+          # Nothing here depends on a checkout, so a broken repo state cannot
+          # silence the notification.
+          fail() { echo "::error::Matrix notify: $*"; exit 1; }
+
+          printf '%s' "$VAULT_CA" > /tmp/notify-ca.pem
+          sa=/var/run/secrets/kubernetes.io/serviceaccount/token
+          [ -r "$sa" ] || fail "no projected service-account token at $sa"
+
+          vt="$(curl -sS --cacert /tmp/notify-ca.pem -X POST \
+                  --data "{\"role\":\"packer-ci\",\"jwt\":\"$(cat "$sa")\"}" \
+                  "$VAULT_ADDR/v1/auth/kubernetes/login" \
+                | python3 -c 'import sys,json; print(json.load(sys.stdin)["auth"]["client_token"])' 2>/dev/null)"
+          [ -n "$vt" ] || fail "Vault login failed (role=packer-ci)"
+          echo "::add-mask::$vt"
+
+          creds="$(curl -sS --cacert /tmp/notify-ca.pem -H "X-Vault-Token: $vt" \
+                     "$VAULT_ADDR/v1/secret/data/matrix-bot-github-actions")"
+          rd() { printf '%s' "$creds" | python3 -c "import sys,json; print(json.load(sys.stdin)['data']['data']['$1'])" 2>/dev/null; }
+          tok="$(rd access_token)"; room="$(rd room_id)"; user="$(rd user_id)"
+          [ -n "$tok" ] && [ -n "$room" ] && [ -n "$user" ] || fail "could not read secret/matrix-bot-github-actions"
+          echo "::add-mask::$tok"
+
+          hs="https://${user#*:}"
+          room_enc="$(python3 -c 'import urllib.parse,sys; print(urllib.parse.quote(sys.argv[1], safe=""))' "$room")"
+
+          body="$(python3 - <<'PY'
+          import json, os
+          wf, repo = os.environ["WF"], os.environ["REPO"]
+          ref, ev, url = os.environ["REF"], os.environ["EVENT"], os.environ["RUN_URL"]
+          plain = ("FAILED: " + wf + "\n" + repo + " - branch " + ref + ", triggered by " + ev
+                   + "\nNo templates may have been built at all.\n" + url)
+          html = ("&#10060; <b>" + wf + "</b> failed<br/>"
+                  + repo + " &middot; branch <code>" + ref + "</code> &middot; " + ev + "<br/>"
+                  + "<i>No templates may have been built at all.</i><br/>"
+                  + "<a href=\"" + url + "\">" + url + "</a>")
+          print(json.dumps({"msgtype": "m.notice", "body": plain,
+                            "format": "org.matrix.custom.html", "formatted_body": html}))
+          PY
+          )"
+
+          code="$(curl -sS -o /tmp/notify-resp.json -w '%{http_code}' \
+                    --cacert /tmp/notify-ca.pem -X PUT \
+                    -H "Authorization: Bearer $tok" -H 'Content-Type: application/json' \
+                    --data "$body" \
+                    "$hs/_matrix/client/v3/rooms/$room_enc/send/m.room.message/gha-fanout-${{ github.event.workflow_run.id }}")"
+          if [ "$code" = "200" ]; then
+            echo "Matrix notification delivered to #alerts-ci."
+          else
+            fail "send returned HTTP $code: $(head -c 300 /tmp/notify-resp.json)"
+          fi

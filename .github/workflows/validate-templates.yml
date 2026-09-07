@@ -24,7 +24,6 @@ jobs:
     timeout-minutes: 120
     env:
       VAULT_ADDR: ${{ vars.VAULT_ADDR }}
-      VAULT_TOKEN: ${{ secrets.VAULT_TOKEN }}
       VAULT_CACERT: /tmp/vault-ca.pem
       GITLEAKS_LICENSE: ${{ secrets.GITLEAKS_LICENSE }}
     steps:
@@ -46,7 +45,14 @@ jobs:
         run: |
           set -euo pipefail
           sudo apt-get update
-          sudo apt-get install -y --no-install-recommends ca-certificates libatomic1
+          sudo apt-get install -y --no-install-recommends ca-certificates libatomic1 unzip
+          # The vault CLI is only needed to log in below. Packer's own vault()
+          # function speaks HTTP and does not use it, which is why this job never
+          # installed it while it was handed a ready-made token.
+          vault_version="1.19.5"
+          curl -fsSLo /tmp/vault.zip "https://releases.hashicorp.com/vault/${vault_version}/vault_${vault_version}_linux_amd64.zip"
+          sudo unzip -o /tmp/vault.zip vault -d /usr/local/bin
+          sudo chmod 0755 /usr/local/bin/vault
           python -m venv .venv
           . .venv/bin/activate
           python -m pip install --upgrade pip
@@ -60,6 +66,23 @@ jobs:
           printf '%s' "${{ secrets.VAULT_CACERT }}" > /tmp/vault-ca.pem
           sudo install -m 0644 /tmp/vault-ca.pem /usr/local/share/ca-certificates/vault-viking-org.crt
           sudo update-ca-certificates
+
+      - name: Log in to Vault (Kubernetes auth)
+        shell: bash
+        run: |
+          set -euo pipefail
+          # See the same step in _build-test-template.yml for why this is not a
+          # stored token: the previous static secrets.VAULT_TOKEN expired on
+          # 2026-08-28 and took every scheduled build with it for two weeks.
+          # These runners are in-cluster, so they authenticate as themselves.
+          jwt="$(cat /var/run/secrets/kubernetes.io/serviceaccount/token)"
+          token="$(vault write -field=token auth/kubernetes/login \
+            role=packer-ci jwt="$jwt")"
+          echo "::add-mask::$token"
+          echo "VAULT_TOKEN=$token" >> "$GITHUB_ENV"
+          # Prove the policy grants the read, not just that login worked.
+          VAULT_TOKEN="$token" vault kv get -field=PROXMOX_URL secret/packer >/dev/null
+          echo "Vault login succeeded and secret/packer is readable."
 
       - name: Run pre-commit checks
         shell: bash
@@ -85,3 +108,67 @@ jobs:
           set -euo pipefail
           . .venv/bin/activate
           ./build.py --validate-only "${{ github.event.inputs.validate_target || 'all' }}"
+
+      # Identical to the step of the same name in _build-test-template.yml; see
+      # there for why it is self-contained and why it never fails the job.
+      - name: Notify Matrix on failure
+        if: failure()
+        shell: bash
+        env:
+          VAULT_CA: ${{ secrets.VAULT_CACERT }}
+          WF: ${{ github.workflow }}
+          REPO: ${{ github.repository }}
+          REF: ${{ github.ref_name }}
+          EVENT: ${{ github.event_name }}
+          TARGET: ""
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: |
+          set -uo pipefail
+          fail() { echo "::error::Matrix notify: $*"; exit 0; }
+
+          printf '%s' "$VAULT_CA" > /tmp/notify-ca.pem
+          sa=/var/run/secrets/kubernetes.io/serviceaccount/token
+          [ -r "$sa" ] || fail "no projected service-account token at $sa"
+
+          vt="$(curl -sS --cacert /tmp/notify-ca.pem -X POST \
+                  --data "{\"role\":\"packer-ci\",\"jwt\":\"$(cat "$sa")\"}" \
+                  "$VAULT_ADDR/v1/auth/kubernetes/login" \
+                | python3 -c 'import sys,json; print(json.load(sys.stdin)["auth"]["client_token"])' 2>/dev/null)"
+          [ -n "$vt" ] || fail "Vault login failed (role=packer-ci)"
+          echo "::add-mask::$vt"
+
+          creds="$(curl -sS --cacert /tmp/notify-ca.pem -H "X-Vault-Token: $vt" \
+                     "$VAULT_ADDR/v1/secret/data/matrix-bot-github-actions")"
+          rd() { printf '%s' "$creds" | python3 -c "import sys,json; print(json.load(sys.stdin)['data']['data']['$1'])" 2>/dev/null; }
+          tok="$(rd access_token)"; room="$(rd room_id)"; user="$(rd user_id)"
+          [ -n "$tok" ] && [ -n "$room" ] && [ -n "$user" ] || fail "could not read secret/matrix-bot-github-actions"
+          echo "::add-mask::$tok"
+
+          hs="https://${user#*:}"
+          room_enc="$(python3 -c 'import urllib.parse,sys; print(urllib.parse.quote(sys.argv[1], safe=""))' "$room")"
+
+          body="$(python3 - <<'PY'
+          import json, os
+          wf, repo = os.environ["WF"], os.environ["REPO"]
+          ref, ev, url = os.environ["REF"], os.environ["EVENT"], os.environ["RUN_URL"]
+          tgt = os.environ.get("TARGET", "")
+          head = wf + (" [" + tgt + "]" if tgt else "")
+          plain = "FAILED: " + head + "\n" + repo + " - branch " + ref + ", triggered by " + ev + "\n" + url
+          html = ("&#10060; <b>" + head + "</b> failed<br/>"
+                  + repo + " &middot; branch <code>" + ref + "</code> &middot; " + ev + "<br/>"
+                  + "<a href=\"" + url + "\">" + url + "</a>")
+          print(json.dumps({"msgtype": "m.notice", "body": plain,
+                            "format": "org.matrix.custom.html", "formatted_body": html}))
+          PY
+          )"
+
+          code="$(curl -sS -o /tmp/notify-resp.json -w '%{http_code}' \
+                    --cacert /tmp/notify-ca.pem -X PUT \
+                    -H "Authorization: Bearer $tok" -H 'Content-Type: application/json' \
+                    --data "$body" \
+                    "$hs/_matrix/client/v3/rooms/$room_enc/send/m.room.message/gha-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}")"
+          if [ "$code" = "200" ]; then
+            echo "Matrix notification delivered to #alerts-ci."
+          else
+            fail "send returned HTTP $code: $(head -c 300 /tmp/notify-resp.json)"
+          fi
