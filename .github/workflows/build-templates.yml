@@ -47,16 +47,21 @@ concurrency:
   group: build-templates-fanout
   cancel-in-progress: false
 
+
 jobs:
-  fan-out:
-    name: Weekly cloud rebuild (fan-out)
+  select:
+    name: Select templates
     runs-on: ubuntu-latest
-    timeout-minutes: 720
+    timeout-minutes: 10
+    outputs:
+      list: ${{ steps.pick.outputs.list }}
+      count: ${{ steps.pick.outputs.count }}
     env:
       GH_TOKEN: ${{ github.token }}
       REPO: ${{ github.repository }}
     steps:
-      - name: Dispatch each cloud pipeline serially and wait
+      - name: Decide which cloud pipelines to rebuild
+        id: pick
         shell: bash
         run: |
           set -uo pipefail
@@ -102,44 +107,87 @@ jobs:
           wfs="$(echo "$wfs" | tr -s ' \n' ' ' | sed 's/^ //;s/ $//')"
           if [ -z "$wfs" ]; then
             echo "No template pipeline is affected by this change; nothing to do."
+            echo "list=[]"  >> "$GITHUB_OUTPUT"
+            echo "count=0"  >> "$GITHUB_OUTPUT"
             exit 0
           fi
           echo "Templates to rebuild: $wfs"
-          # SERIAL BY NECESSITY — do not parallelise this loop.
-          # There is ONE Proxmox target and the builds share VMID ranges (each
-          # build VM lands on the template's own VMID; clone-verify clones into
-          # 9600+), so two running at once would collide (VMID clashes, DHCP,
-          # resource contention). We dispatch one pipeline, block on it with
-          # `gh run watch` until it finishes, then start the next. The shared
-          # `packer-target-environment` concurrency group enforces the same rule
-          # from the other side: firing all nine at once would leave 1 running +
-          # 1 pending and CANCEL the other 7. Parallelism would require multiple
-          # Proxmox targets or non-overlapping VMID/clone ranges per template.
-          overall=0
-          summary=()
-          for wf in $wfs; do
-            echo "::group::$wf"
-            prev="$(gh run list --repo "$REPO" --workflow "$wf.yml" --limit 1 --json databaseId -q '.[0].databaseId // "0"')"
-            gh workflow run "$wf.yml" --repo "$REPO"
-            # Wait for a NEW run to appear; fail loudly if the dispatch produced
-            # none (e.g. GITHUB_TOKEN lacking workflow_dispatch rights -> use a PAT).
-            rid=""
-            for _ in $(seq 1 20); do
-              sleep 6
-              cur="$(gh run list --repo "$REPO" --workflow "$wf.yml" --limit 1 --json databaseId -q '.[0].databaseId // "0"')"
-              if [ "$cur" != "$prev" ]; then rid="$cur"; break; fi
-            done
-            if [ -z "$rid" ]; then
-              echo "ERROR: no new run for $wf after dispatch (token may lack workflow_dispatch rights)"
-              overall=1; summary+=("$wf: NO-RUN"); echo "::endgroup::"; continue
-            fi
-            gh run watch "$rid" --repo "$REPO" --exit-status >/dev/null 2>&1 || true
-            concl="$(gh run view "$rid" --repo "$REPO" --json conclusion -q '.conclusion')"
-            echo "$wf -> $concl (run $rid)"
-            [ "$concl" = "success" ] || overall=1
-            summary+=("$wf: $concl")
-            echo "::endgroup::"
+          echo "list=$(printf '%s\n' $wfs | jq -R . | jq -cs .)" >> "$GITHUB_OUTPUT"
+          echo "count=$(echo $wfs | wc -w | tr -d ' ')" >> "$GITHUB_OUTPUT"
+
+  # ONE JOB PER TEMPLATE, run one at a time.
+  #
+  # This used to be a single job looping over every template. That job could
+  # never finish: GitHub terminates any job at 6 HOURS of execution regardless
+  # of timeout-minutes (the old value, 720, was unachievable and merely looked
+  # generous). Seven Linux templates take ~2h50 and each Windows build is capped
+  # at 5h by _build-test-template.yml, so the full pass always blew the wall --
+  # on 2026-09-12 it was killed at exactly 06:00:14 while waiting on
+  # windows-2022, after five templates had already gone green. The orchestrator
+  # had never once completed: every run since August was cancelled or failed.
+  #
+  # A matrix gives each template its OWN job and therefore its own 6h budget,
+  # while max-parallel: 1 keeps them strictly serial -- still mandatory, because
+  # there is ONE Proxmox target and builds share VMID ranges (build VMs land on
+  # the template's own VMID, clone-verify clones into 9600+), so two at once
+  # would collide. The packer-target-environment group on the template pipelines
+  # enforces the same rule from the other side. fail-fast: false so one bad
+  # template does not cancel the rest of the run.
+  build:
+    name: ${{ matrix.wf }}
+    needs: select
+    if: needs.select.outputs.count != '0'
+    runs-on: ubuntu-latest
+    # Under GitHub's 6h ceiling, with room for the 5h cap on the build it waits on.
+    timeout-minutes: 350
+    strategy:
+      max-parallel: 1
+      fail-fast: false
+      matrix:
+        wf: ${{ fromJson(needs.select.outputs.list) }}
+    env:
+      GH_TOKEN: ${{ github.token }}
+      REPO: ${{ github.repository }}
+    steps:
+      - name: Dispatch and wait
+        shell: bash
+        run: |
+          set -uo pipefail
+          wf="${{ matrix.wf }}"
+          prev="$(gh run list --repo "$REPO" --workflow "$wf.yml" --limit 1 --json databaseId -q '.[0].databaseId // "0"')"
+          gh workflow run "$wf.yml" --repo "$REPO"
+          # Wait for a NEW run to appear; fail loudly if the dispatch produced
+          # none (e.g. GITHUB_TOKEN lacking workflow_dispatch rights -> use a PAT).
+          rid=""
+          for _ in $(seq 1 20); do
+            sleep 6
+            cur="$(gh run list --repo "$REPO" --workflow "$wf.yml" --limit 1 --json databaseId -q '.[0].databaseId // "0"')"
+            if [ "$cur" != "$prev" ]; then rid="$cur"; break; fi
           done
-          echo "===== SUMMARY ====="
-          for s in "${summary[@]}"; do echo "  $s"; done
-          exit "$overall"
+          if [ -z "$rid" ]; then
+            echo "::error::no new run for $wf after dispatch (token may lack workflow_dispatch rights)"
+            exit 1
+          fi
+          echo "Watching https://github.com/$REPO/actions/runs/$rid"
+          gh run watch "$rid" --repo "$REPO" --exit-status >/dev/null 2>&1 || true
+          concl="$(gh run view "$rid" --repo "$REPO" --json conclusion -q '.conclusion')"
+          echo "$wf -> $concl (run $rid)"
+          echo "$wf -> $concl ([run $rid](https://github.com/$REPO/actions/runs/$rid))" >> "$GITHUB_STEP_SUMMARY"
+          [ "$concl" = "success" ]
+
+  summary:
+    name: Summary
+    needs: [select, build]
+    if: always()
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Report
+        shell: bash
+        run: |
+          echo "Selected: ${{ needs.select.outputs.list }}"
+          echo "Build result: ${{ needs.build.result }}"
+          case "${{ needs.build.result }}" in
+            success|skipped) echo "All selected templates rebuilt cleanly." ;;
+            *) echo "::error::at least one template pipeline did not succeed"; exit 1 ;;
+          esac
