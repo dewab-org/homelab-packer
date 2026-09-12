@@ -2,17 +2,21 @@ name: template-windows-2025-cloud
 
 # Per-template build->test pipeline. Delegates to the reusable
 # _build-test-template.yml so this file stays a thin, badge-bearing entry point.
-# Triggers on changes to just this template (plus shared inputs) and on demand.
+# Triggers ONLY on changes to this template's own files, plus on demand.
+# Shared inputs (build.py, tests/clone-verify.py, _build-test-template.yml,
+# builds/linux/{ansible,common}, builds/windows/common) deliberately do NOT
+# appear here: they affect several templates, and every template pipeline
+# shares the packer-target-environment concurrency group, so a shared-path
+# push used to start all nine at once and leave 1 running + 1 pending while
+# GitHub CANCELLED the other 7 (seen 2026-09-07, commit 12b4456 -- the Vault
+# auth fix was verified on 2 of 9 templates). build-templates.yml now owns
+# those paths and dispatches the affected pipelines serially.
 
 on:
   push:
     branches: [main]
     paths:
       - "builds/windows/windows-server-2025-desktop-experience-cloud/**/*.hcl"
-      - "builds/windows/common/**"
-      - "build.py"
-      - "tests/clone-verify.py"
-      - ".github/workflows/_build-test-template.yml"
       - ".github/workflows/template-windows-2025-cloud.yml"
   workflow_dispatch:
     inputs:

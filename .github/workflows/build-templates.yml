@@ -1,8 +1,11 @@
 name: build-templates
 
-# Weekly "rebuild everything" for drift detection — dispatches each CLOUD
-# per-template pipeline (template-*-cloud) serially and waits for each, so every
-# template's own badge reflects the weekly run. They share the
+# Serial dispatcher for the CLOUD per-template pipelines (template-*-cloud). Two
+# jobs: the weekly "rebuild everything" drift check, and — since 2026-09-12 — the
+# owner of every SHARED build input, so a change to one is verified across the
+# templates it affects instead of self-cancelling eight of them. Dispatches each
+# pipeline serially and waits for each, so every template's own badge reflects
+# the run. They share the
 # packer-target-environment concurrency group and must not overlap, hence the
 # serial dispatch. Runs on a GitHub-hosted runner (NOT arc-runners) so it does
 # not hold a self-hosted runner that the dispatched builds themselves need.
@@ -13,6 +16,21 @@ on:
   schedule:
     # Sundays 14:00 UTC (09:00 CDT). Clear of the nightly job band.
     - cron: "0 14 * * 0"
+  push:
+    branches: [main]
+    # SHARED inputs live here, not on the per-template pipelines. A change to any
+    # of these affects several templates; firing their nine workflows directly
+    # would leave 1 running + 1 pending and CANCEL the other 7 (they all share
+    # the packer-target-environment group). Routing them here instead dispatches
+    # the affected pipelines SERIALLY. Deliberately excludes this file itself: a
+    # tweak to the orchestrator should not cost a full nine-template rebuild.
+    paths:
+      - "builds/linux/ansible/**"
+      - "builds/linux/common/**"
+      - "builds/windows/common/**"
+      - "build.py"
+      - "tests/clone-verify.py"
+      - ".github/workflows/_build-test-template.yml"
   workflow_dispatch:
     inputs:
       templates:
@@ -42,12 +60,51 @@ jobs:
         shell: bash
         run: |
           set -uo pipefail
-          wfs="${{ github.event.inputs.templates }}"
-          if [ -z "$wfs" ]; then
-            wfs="template-rhel-8-cloud template-rhel-9-cloud template-rhel-10-cloud \
+          LINUX="template-rhel-8-cloud template-rhel-9-cloud template-rhel-10-cloud \
                  template-rocky-8-cloud template-rocky-9-cloud template-rocky-10-cloud \
-                 template-ubuntu-24.04-cloud template-windows-2022-cloud template-windows-2025-cloud"
+                 template-ubuntu-24.04-cloud"
+          WINDOWS="template-windows-2022-cloud template-windows-2025-cloud"
+          ALL="$LINUX $WINDOWS"
+
+          wfs="${{ github.event.inputs.templates }}"
+          if [ -n "$wfs" ]; then
+            echo "Explicit template list from workflow_dispatch."
+          elif [ "${{ github.event_name }}" != "push" ]; then
+            # schedule, or a dispatch with a blank list: rebuild everything.
+            wfs="$ALL"
+          else
+            # Push to a shared path. Rebuild only the templates that path can
+            # actually affect -- a builds/windows/common change has no business
+            # spending hours rebuilding seven Linux templates, and vice versa.
+            before="${{ github.event.before }}"
+            changed=""
+            if [ -n "$before" ] && [ "$before" != "0000000000000000000000000000000000000000" ]; then
+              changed="$(gh api "repos/$REPO/compare/$before...${{ github.sha }}" \
+                          --jq '.files[].filename' 2>/dev/null)"
+            fi
+            if [ -z "$changed" ]; then
+              # Force-push, new branch, or a compare the API would not serve.
+              # Fail SAFE (rebuild all), never silently skip: an unverified
+              # shared change is exactly how two weeks of red went unnoticed.
+              echo "::warning::could not determine changed files; rebuilding ALL templates"
+              wfs="$ALL"
+            else
+              echo "Changed files:"; echo "$changed" | sed 's/^/  /'
+              if echo "$changed" | grep -qE '^(build\.py|tests/clone-verify\.py|\.github/workflows/_build-test-template\.yml)$'; then
+                wfs="$ALL"
+              else
+                echo "$changed" | grep -qE '^builds/linux/(ansible|common)/' && wfs="$wfs $LINUX"
+                echo "$changed" | grep -qE '^builds/windows/common/'          && wfs="$wfs $WINDOWS"
+              fi
+            fi
           fi
+
+          wfs="$(echo "$wfs" | tr -s ' \n' ' ' | sed 's/^ //;s/ $//')"
+          if [ -z "$wfs" ]; then
+            echo "No template pipeline is affected by this change; nothing to do."
+            exit 0
+          fi
+          echo "Templates to rebuild: $wfs"
           # SERIAL BY NECESSITY — do not parallelise this loop.
           # There is ONE Proxmox target and the builds share VMID ranges (each
           # build VM lands on the template's own VMID; clone-verify clones into
