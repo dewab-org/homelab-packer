@@ -27,7 +27,13 @@ permissions:
 jobs:
   notify:
     name: Announce fan-out failure
-    if: github.event.workflow_run.conclusion == 'failure'
+    # failure OR cancelled. The fan-out runs on a GitHub-HOSTED runner, which has
+    # a hard 6-hour cap that no timeout-minutes can raise - and nine serial
+    # builds do not fit in 6h, so every run since 2026-08-16 has ended
+    # `cancelled` at exactly 6h00m. On 09-12 this watcher triggered on that and
+    # SKIPPED, because it only looked for `failure`. The one outcome the weekly
+    # rebuild actually produces was the one it ignored.
+    if: contains(fromJSON('["failure","cancelled"]'), github.event.workflow_run.conclusion)
     runs-on: arc-runners
     timeout-minutes: 10
     env:
@@ -38,6 +44,7 @@ jobs:
         env:
           VAULT_CA: ${{ secrets.VAULT_CACERT }}
           WF: build-templates (weekly fan-out)
+          STATUS: ${{ github.event.workflow_run.conclusion }}
           REPO: ${{ github.repository }}
           REF: ${{ github.event.workflow_run.head_branch }}
           EVENT: ${{ github.event.workflow_run.event }}
@@ -75,11 +82,16 @@ jobs:
           import json, os
           wf, repo = os.environ["WF"], os.environ["REPO"]
           ref, ev, url = os.environ["REF"], os.environ["EVENT"], os.environ["RUN_URL"]
-          plain = ("FAILED: " + wf + "\n" + repo + " - branch " + ref + ", triggered by " + ev
-                   + "\nNo templates may have been built at all.\n" + url)
-          html = ("&#10060; <b>" + wf + "</b> failed<br/>"
+          status = os.environ.get("STATUS", "failure")
+          if status == "cancelled":
+              why = "Cancelled - on a GitHub-hosted runner that is the 6-hour hard cap, so later pipelines in the serial list were never dispatched."
+          else:
+              why = "No templates may have been built at all."
+          plain = (status.upper() + ": " + wf + "\n" + repo + " - branch " + ref + ", triggered by " + ev
+                   + "\n" + why + "\n" + url)
+          html = ("&#10060; <b>" + wf + "</b> " + status + "<br/>"
                   + repo + " &middot; branch <code>" + ref + "</code> &middot; " + ev + "<br/>"
-                  + "<i>No templates may have been built at all.</i><br/>"
+                  + "<i>" + why + "</i><br/>"
                   + "<a href=\"" + url + "\">" + url + "</a>")
           print(json.dumps({"msgtype": "m.notice", "body": plain,
                             "format": "org.matrix.custom.html", "formatted_body": html}))

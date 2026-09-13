@@ -168,6 +168,13 @@ jobs:
           ./build.py --init-only "${{ inputs.build_dir }}"
 
       - name: Build template
+        # STEP timeout, deliberately under the job's 300. When the JOB cap fires,
+        # GitHub records the run as `cancelled`, not `failure` - so `if: failure()`
+        # steps never run and a hung build is invisible. That is exactly how the
+        # 09-12 Windows 2022 run spent 4h53m in a Windows Update reboot loop and
+        # announced nothing. A step timeout fails the STEP instead, which is a
+        # real failure() and gets reported.
+        timeout-minutes: 270
         shell: bash
         run: |
           set -euo pipefail
@@ -182,6 +189,7 @@ jobs:
           ./build.py $arg "${{ inputs.build_dir }}"
 
       - name: Clone-verify template
+        timeout-minutes: 25
         shell: bash
         run: |
           set -euo pipefail
@@ -196,7 +204,13 @@ jobs:
           python tests/clone-verify.py "$vmid"
 
       - name: Notify Matrix on failure
-        if: failure()
+        # failure() OR cancelled(): a job killed by its timeout-minutes ends as
+        # `cancelled`, and that is the outcome most worth hearing about for a
+        # two-hour build. The step timeouts above should turn a hang into a
+        # failure first; this is the backstop if they do not. The cost is that a
+        # manual cancel also posts - rare here (cancel-in-progress is off), and
+        # the message says which it was.
+        if: failure() || cancelled()
         shell: bash
         env:
           VAULT_CA: ${{ secrets.VAULT_CACERT }}
@@ -204,6 +218,7 @@ jobs:
           REPO: ${{ github.repository }}
           REF: ${{ github.ref_name }}
           EVENT: ${{ github.event_name }}
+          STATUS: ${{ job.status }}
           TARGET: ${{ inputs.build_dir }}
           RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
         run: |
@@ -255,8 +270,13 @@ jobs:
           ref, ev, url = os.environ["REF"], os.environ["EVENT"], os.environ["RUN_URL"]
           tgt = os.environ.get("TARGET", "")
           head = wf + (" [" + tgt + "]" if tgt else "")
-          plain = "FAILED: " + head + "\n" + repo + " - branch " + ref + ", triggered by " + ev + "\n" + url
-          html = ("&#10060; <b>" + head + "</b> failed<br/>"
+          status = os.environ.get("STATUS", "failure")
+          # A cancelled job is almost always the timeout cap, and it leaves NO red
+          # step to point at - say so, or the reader goes looking for one.
+          note = "" if status == "failure" else "\nEnded as " + status + ": a timeout kill looks like this, with no failed step."
+          plain = status.upper() + ": " + head + "\n" + repo + " - branch " + ref + ", triggered by " + ev + note + "\n" + url
+          html = ("&#10060; <b>" + head + "</b> " + status + "<br/>"
+                  + ("" if status == "failure" else "<i>Ended as " + status + ": a timeout kill looks like this, with no failed step.</i><br/>")
                   + repo + " &middot; branch <code>" + ref + "</code> &middot; " + ev + "<br/>"
                   + "<a href=\"" + url + "\">" + url + "</a>")
           print(json.dumps({"msgtype": "m.notice", "body": plain,

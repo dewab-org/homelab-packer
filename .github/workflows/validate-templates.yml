@@ -112,7 +112,8 @@ jobs:
       # Identical to the step of the same name in _build-test-template.yml; see
       # there for why it is self-contained and why it never fails the job.
       - name: Notify Matrix on failure
-        if: failure()
+        # failure() OR cancelled() - see the same step in _build-test-template.yml.
+        if: failure() || cancelled()
         shell: bash
         env:
           VAULT_CA: ${{ secrets.VAULT_CACERT }}
@@ -120,6 +121,7 @@ jobs:
           REPO: ${{ github.repository }}
           REF: ${{ github.ref_name }}
           EVENT: ${{ github.event_name }}
+          STATUS: ${{ job.status }}
           TARGET: ""
           RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
         run: |
@@ -153,8 +155,11 @@ jobs:
           ref, ev, url = os.environ["REF"], os.environ["EVENT"], os.environ["RUN_URL"]
           tgt = os.environ.get("TARGET", "")
           head = wf + (" [" + tgt + "]" if tgt else "")
-          plain = "FAILED: " + head + "\n" + repo + " - branch " + ref + ", triggered by " + ev + "\n" + url
-          html = ("&#10060; <b>" + head + "</b> failed<br/>"
+          status = os.environ.get("STATUS", "failure")
+          note = "" if status == "failure" else "\nEnded as " + status + ": a timeout kill looks like this, with no failed step."
+          plain = status.upper() + ": " + head + "\n" + repo + " - branch " + ref + ", triggered by " + ev + note + "\n" + url
+          html = ("&#10060; <b>" + head + "</b> " + status + "<br/>"
+                  + ("" if status == "failure" else "<i>Ended as " + status + ": a timeout kill looks like this, with no failed step.</i><br/>")
                   + repo + " &middot; branch <code>" + ref + "</code> &middot; " + ev + "<br/>"
                   + "<a href=\"" + url + "\">" + url + "</a>")
           print(json.dumps({"msgtype": "m.notice", "body": plain,
