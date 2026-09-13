@@ -1,1 +1,0 @@
-../common/definitions.pkr.hcl

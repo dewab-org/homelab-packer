@@ -1,9 +1,12 @@
 name: template-windows-2022-desktop-experience-iso
 
-# Windows ISO build for one template. BY-HAND ONLY and DISABLED by default:
-# ISO installs are slow (full Windows Setup), so they never run on push or
-# schedule. This workflow is `gh workflow disable`d — enable + dispatch when you
-# specifically need a CI ISO rebuild, or run `./build.py builds/windows/windows-server-2022-desktop-experience-iso` locally.
+# Windows ISO build for one template. Since 2026-09-13 this IS the Windows
+# path: the VHD-based "cloud" pipelines were retired because their 2021 Azure
+# eval bases could no longer take the current cumulative update. Dispatched by
+# build-templates.yml (weekly, and on shared-input pushes) - never on push or
+# schedule here, since a full Windows Setup + Windows Update is ~2h. Run
+# `./build.py --overwrite builds/windows/windows-server-2022-desktop-experience-iso`
+# locally for the same thing; build.py builds at a scratch VMID and swaps on success.
 
 on:
   workflow_dispatch:
