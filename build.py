@@ -30,6 +30,22 @@ BUILD_BLOCK_RE = re.compile(r"^\s*build\s*{", re.MULTILINE)
 # or Proxmox API blip to clear, short enough not to stall an overnight run.
 RETRY_DELAY_SECONDS = 30
 
+# Builds never land on the template's own VMID. Packer builds at
+# vm_id + SCRATCH_OFFSET; the result is verified (template flag, then a real
+# clone-boot via tests/clone-verify.py); only THEN is the live template replaced
+# by a full clone back onto its stable VMID, and the scratch copy deleted.
+#
+# This exists because the previous design - packer -force straight onto the
+# target - destroys the working template as its FIRST act and then spends two
+# hours building the replacement. Both Windows cloud templates were lost that
+# way (9432 on 2026-09-12, 9434 on 2026-08-23): the rebuilds hung, the jobs were
+# killed at their timeout, and nothing was left behind but a half-built VM.
+#
+# +10000 rather than a neighbouring number: tests/clone-verify.py owns
+# 9600-9699 for its throwaway clones, and nothing in the estate lives above
+# 9500, so 19xxx is unmistakably scratch and cannot collide with either.
+SCRATCH_OFFSET = 10000
+
 
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(
@@ -43,17 +59,24 @@ def parse_args() -> argparse.Namespace:
         default=2,
         metavar="N",
         help="retry a failed packer build up to N times (default 2; 0 disables). "
-        "Retries also fire when packer exits 0 but the template is not found in "
-        "Proxmox. Ignored with --ask/--init-only/--validate-only.",
+        "Retries also fire when packer exits 0 but no template is found at the "
+        "scratch VMID. Ignored with --ask/--init-only/--validate-only.",
     )
     parser.add_argument(
         "--no-verify",
         action="store_true",
-        help="skip the post-build check that the template exists in Proxmox",
+        help="skip the clone-boot verification (tests/clone-verify.py) of the new "
+        "template before it replaces the live one. The cheap check that packer "
+        "actually produced a template is never skipped - promotion depends on it.",
     )
     exclusive = parser.add_mutually_exclusive_group()
     exclusive.add_argument(
-        "--overwrite", action="store_true", help="overwrite existing template/VMID"
+        "--overwrite",
+        action="store_true",
+        help="allow an existing template at the target VMID to be replaced. The "
+        "replacement happens only after the new build is verified; without this "
+        "flag a build whose target already exists is refused up front rather "
+        "than two hours in.",
     )
     exclusive.add_argument(
         "--skip",
@@ -145,9 +168,11 @@ def resolve_targets(target: str | None) -> list[str]:
     partition layout, a FIPS/STIG install-time option, or an OS with no
     published cloud image.
 
-    Windows is excluded from every keyword: those builds are in-progress
-    stubs that cannot complete unattended. Build them explicitly with
-    ./build.py builds/windows/<name>.
+    Windows is excluded from every keyword on purpose: each Windows ISO build
+    is a full Windows Setup plus Windows Update, about two hours, so a keyword
+    that swept them in would turn a quick Linux pass into an all-day one. CI
+    dispatches them individually (see .github/workflows/build-templates.yml);
+    locally, name the directory: ./build.py builds/windows/<name>.
     """
     if not target:
         return []
@@ -192,6 +217,10 @@ def parse_vm_id(build_vars: Path) -> str:
     return match.group(1) if match else ""
 
 
+def scratch_vm_id(vm_id: str) -> str:
+    return str(int(vm_id) + SCRATCH_OFFSET)
+
+
 def generate_build_ssh_keypair() -> tuple[str, str, Path]:
     tmpdir = Path(tempfile.mkdtemp(prefix="packer-ssh-key-"))
     key_path = tmpdir / "id_ed25519"
@@ -233,7 +262,51 @@ def proxmox_client() -> "ProxmoxAPI | None":
         password=password,
         verify_ssl=False,
         port=port,
+        # A full clone of an 80G template is one long-running API call.
+        timeout=120,
     )
+
+
+def find_vm(prox, vm_id: str) -> dict | None:
+    """The cluster resource entry for a VMID, or None when nothing is there.
+
+    Raises on a failed query (deliberately): callers that promote or destroy
+    must not mistake "Proxmox did not answer" for "the VMID is free".
+    """
+    for entry in prox.cluster.resources.get(type="vm"):
+        if str(entry.get("vmid")) == str(vm_id):
+            return entry
+    return None
+
+
+def is_template(entry: dict | None) -> bool:
+    return entry is not None and int(entry.get("template", 0) or 0) == 1
+
+
+def vm_config(prox, node: str, vm_id: str) -> dict | None:
+    """The VM's live config from its node, or None if it does not exist.
+
+    cluster/resources is a CACHE refreshed by pvestatd every few seconds. Its
+    `template` flag lagged a full second behind a completed template task in
+    testing, and a destroyed VM lingers in it just as long. The node's config
+    endpoint is authoritative, so every irreversible decision below reads this
+    instead.
+    """
+    try:
+        return prox.nodes(node).qemu(vm_id).config.get()
+    except Exception as exc:
+        text = str(exc).lower()
+        if "does not exist" in text or "no such" in text or "500" in text:
+            return None
+        raise
+
+
+def is_template_now(prox, entry: dict | None) -> bool:
+    """Authoritative template check for a cluster-resources entry."""
+    if entry is None:
+        return False
+    cfg = vm_config(prox, entry["node"], entry["vmid"])
+    return cfg is not None and int(cfg.get("template", 0) or 0) == 1
 
 
 def template_exists(build_dir: Path, build_vars: Path) -> bool | None:
@@ -258,11 +331,11 @@ def template_exists(build_dir: Path, build_vars: Path) -> bool | None:
 
 
 def verify_template_built(build_dir: Path, build_vars: Path) -> bool | None:
-    """Confirm the build actually produced a Proxmox *template*.
+    """Confirm a Proxmox *template* exists at the build's target VMID.
 
-    packer exiting 0 is not proof: a botched finalize step can leave exit 0
-    with no template, or a plain VM that never got converted. Match on VMID
-    (preferred) or name and require the template flag to be set.
+    Used only by the legacy direct-build path (no Proxmox credentials at build
+    time, see run_build) and by callers outside this file. Matches on VMID or
+    name and requires the template flag.
 
     Returns True/False, or None when Proxmox cannot be queried (no creds) so
     the caller can warn rather than silently trust the exit code.
@@ -318,30 +391,62 @@ def base_status(clone_vm_id: str, target_size: str) -> int:
     return 4
 
 
-def _wait_proxmox_task(prox, node: str, upid, timeout: int = 300) -> None:
-    """Poll a Proxmox task UPID until it stops (best-effort)."""
+def _wait_proxmox_task(prox, node: str, upid, timeout: int = 300) -> str:
+    """Poll a Proxmox task UPID until it stops and return its exit status.
+
+    Returns "OK" on success, the task's own error text on failure, or
+    "TIMEOUT"/"UNKNOWN" when the outcome could not be read. Callers doing
+    anything irreversible must check the return value: a clone that "finished"
+    with an error is not a clone.
+    """
     if not upid:
-        return
+        return "UNKNOWN"
     end = time.time() + timeout
     while time.time() < end:
         try:
             status = prox.nodes(node).tasks(upid).status.get()
         except Exception:
-            return
+            time.sleep(2)
+            continue
         if status.get("status") == "stopped":
-            return
+            return str(status.get("exitstatus", "UNKNOWN"))
         time.sleep(2)
+    return "TIMEOUT"
+
+
+def stop_and_destroy(prox, entry: dict, why: str) -> bool:
+    """Stop (if running) and destroy the VM or template in `entry`."""
+    vm_id = entry.get("vmid")
+    node = entry.get("node")
+    # The entry came from the cluster cache; a VM destroyed seconds ago can
+    # still be listed. Confirm it is really there before touching anything.
+    cfg = vm_config(prox, node, vm_id)
+    if cfg is None:
+        print(f"  {vm_id} is already gone (stale cache entry)")
+        return True
+    kind = "template" if int(cfg.get("template", 0) or 0) == 1 else "VM"
+    print(f"destroying {kind} {vm_id} '{entry.get('name', '')}' on {node}: {why}", flush=True)
+    try:
+        status = prox.nodes(node).qemu(vm_id).status.current.get().get("status")
+        if status == "running":
+            _wait_proxmox_task(prox, node, prox.nodes(node).qemu(vm_id).status.stop.post())
+        result = _wait_proxmox_task(prox, node, prox.nodes(node).qemu(vm_id).delete(purge=1))
+    except Exception as exc:
+        print(f"  ERROR: could not destroy {vm_id}: {exc}", file=sys.stderr)
+        return False
+    if result != "OK":
+        print(f"  ERROR: destroy task for {vm_id} ended '{result}'", file=sys.stderr)
+        return False
+    print(f"  destroyed {vm_id}")
+    return True
 
 
 def purge_stranded_build_vm(build_vars: Path) -> None:
-    """Remove a non-template VM squatting on the output VMID before building.
+    """Legacy-path helper: remove a non-template VM squatting on the target VMID.
 
-    A cancelled or hard-crashed build can leave a plain VM at the target vm_id.
-    packer's -force will not clobber a non-template VM, so every later build
-    dies with "found matching VM ... but it is not a template". Destroy that
-    stranded VM so the build self-heals. A real *template* on the VMID is left
-    alone — packer/--overwrite replaces that itself. No-op without Proxmox creds
-    (packer then surfaces the clear error, same as before).
+    Only the direct-build fallback (no Proxmox credentials) can strand a VM on
+    the target; the scratch-and-swap path clears its own scratch VMID instead.
+    A real *template* on the VMID is left alone here.
     """
     vm_id = parse_vm_id(build_vars)
     if not vm_id:
@@ -350,23 +455,105 @@ def purge_stranded_build_vm(build_vars: Path) -> None:
     if prox is None:
         return
     try:
-        resources = prox.cluster.resources.get(type="vm")
+        entry = find_vm(prox, vm_id)
     except Exception:
         return
-    entry = next((e for e in resources if str(e.get("vmid")) == vm_id), None)
-    if entry is None:
+    if entry is None or is_template(entry):
         return
-    if int(entry.get("template", 0) or 0) == 1:
-        return  # a real template — leave it for packer/-force to replace
-    node = entry.get("node")
-    print(f"purging stranded non-template VM {vm_id} on {node} (would block the clone build)")
+    stop_and_destroy(prox, entry, "stranded non-template VM on the target VMID would block the build")
+
+
+def clear_scratch(prox, scratch: str) -> bool:
+    """Make the scratch VMID free. Anything there is ours by construction."""
     try:
-        if entry.get("status") == "running":
-            _wait_proxmox_task(prox, node, prox.nodes(node).qemu(vm_id).status.stop.post())
-        _wait_proxmox_task(prox, node, prox.nodes(node).qemu(vm_id).delete(purge=1))
-        print(f"  purged {vm_id}")
+        entry = find_vm(prox, scratch)
     except Exception as exc:
-        print(f"  WARNING: could not purge {vm_id}: {exc}", file=sys.stderr)
+        print(f"ERROR: cannot query Proxmox for scratch VMID {scratch}: {exc}", file=sys.stderr)
+        return False
+    if entry is None:
+        return True
+    return stop_and_destroy(prox, entry, "leftover from an earlier attempt at the scratch VMID")
+
+
+def run_clone_verify(vm_id: str) -> bool:
+    """Boot a throwaway clone of the template at vm_id and check it from inside.
+
+    Delegates to tests/clone-verify.py - the same check CI runs after a build -
+    so the new template is exercised BEFORE it replaces the live one.
+    """
+    script = repo_root() / "tests" / "clone-verify.py"
+    if not script.exists():
+        print(f"ERROR: {script} is missing; cannot verify the new template", file=sys.stderr)
+        return False
+    print(f"===== CLONE-VERIFY scratch template {vm_id} =====", flush=True)
+    return run_command([sys.executable, str(script), str(vm_id)]) == 0
+
+
+def promote_scratch(prox, scratch: str, target: str) -> bool:
+    """Replace the live template at `target` with the verified one at `scratch`.
+
+    Order matters and is the whole point:
+      1. the scratch template already exists and has been verified;
+      2. ONLY NOW is the old template at `target` destroyed;
+      3. the scratch is full-cloned onto `target` (stable VMID, same name);
+      4. the copy is converted to a template and checked;
+      5. the scratch is deleted.
+    The live template is unavailable only between 2 and 4 - minutes, for a
+    disk copy - instead of for the whole build. If anything after step 2 fails
+    the scratch is LEFT IN PLACE and named in the error, so the work is not
+    lost and can be promoted by hand.
+    """
+    entry = find_vm(prox, scratch)
+    if not is_template_now(prox, entry):
+        print(f"ERROR: no template at scratch VMID {scratch}; nothing to promote", file=sys.stderr)
+        return False
+    node = entry["node"]
+    # Packer already gave the scratch the right name; carry it over verbatim.
+    # A clone without `name` would be called "Copy-of-VM-<name>".
+    name = entry.get("name") or None
+
+    old = find_vm(prox, target)
+    if old is not None:
+        if not stop_and_destroy(prox, old, f"being replaced by verified scratch template {scratch}"):
+            print(f"ERROR: could not remove the old template at {target}; scratch {scratch} left in place",
+                  file=sys.stderr)
+            return False
+
+    print(f"promoting: full clone {scratch} -> {target}" + (f" ({name})" if name else ""), flush=True)
+    params = {"newid": int(target), "full": 1}
+    if name:
+        params["name"] = name
+    try:
+        result = _wait_proxmox_task(prox, node, prox.nodes(node).qemu(scratch).clone.post(**params), timeout=3600)
+    except Exception as exc:
+        result = f"exception: {exc}"
+    if result != "OK":
+        print(f"ERROR: clone {scratch} -> {target} ended '{result}'; scratch {scratch} left in place "
+              f"(the old template at {target} is already gone - promote the scratch by hand)", file=sys.stderr)
+        return False
+
+    try:
+        result = _wait_proxmox_task(prox, node, prox.nodes(node).qemu(target).template.post(), timeout=600)
+    except Exception as exc:
+        result = f"exception: {exc}"
+    if result != "OK":
+        print(f"ERROR: converting {target} to a template ended '{result}'; scratch {scratch} left in place",
+              file=sys.stderr)
+        return False
+
+    new = find_vm(prox, target)
+    if not is_template_now(prox, new):
+        print(f"ERROR: {target} is not a template after promotion; scratch {scratch} left in place",
+              file=sys.stderr)
+        return False
+
+    if not stop_and_destroy(prox, entry, "scratch copy no longer needed after promotion"):
+        # Not fatal: the live template is in place. Say so and let it be cleaned
+        # up by the next build's clear_scratch().
+        print(f"WARNING: scratch {scratch} could not be deleted; the next build will clear it",
+              file=sys.stderr)
+    print(f"promoted: template {target}" + (f" '{name}'" if name else "") + f" replaced from {scratch}")
+    return True
 
 
 def build_packer_args(
@@ -375,6 +562,7 @@ def build_packer_args(
     build_vars: Path,
     ssh_private_key_file: str | None = None,
     ssh_public_key_build: str | None = None,
+    vm_id_override: str | None = None,
 ) -> list[str]:
     packer_args = []
     packer_args.append(f"-var-file={common_vars}")
@@ -384,6 +572,10 @@ def build_packer_args(
         packer_args.append(f"-var=ssh_private_key_file={ssh_private_key_file}")
     if ssh_public_key_build:
         packer_args.append(f"-var=ssh_public_key_build={ssh_public_key_build}")
+    # After the var-files on purpose: a later -var wins over an earlier
+    # -var-file, which is how the scratch VMID displaces the one in the pkrvars.
+    if vm_id_override:
+        packer_args.append(f"-var=vm_id={vm_id_override}")
     packer_args.append(str(build_dir))
     return packer_args
 
@@ -419,7 +611,8 @@ def run_packer(
     build_dir: Path,
     common_vars: Path,
     args: argparse.Namespace,
-    force_overwrite: bool = False,
+    force: bool = False,
+    vm_id_override: str | None = None,
 ) -> int:
     build_vars = build_dir / "variables.auto.pkrvars.hcl"
     ssh_private_key_file, ssh_public_key_build, ssh_key_tmpdir = generate_build_ssh_keypair()
@@ -427,16 +620,65 @@ def run_packer(
         packer_args = ["packer", "build"]
         if args.ask:
             packer_args.append("-on-error=ask")
-        # Retries must overwrite whatever a failed attempt left behind (a
-        # half-built VM or an already-created template on the target VMID),
-        # otherwise the retry fails on a name/VMID clash instead of the
-        # original transient error.
-        if args.overwrite or force_overwrite:
+        if force:
             packer_args.append("-force")
-        packer_args.extend(build_packer_args(build_dir, common_vars, build_vars, ssh_private_key_file, ssh_public_key_build))
+        packer_args.extend(build_packer_args(
+            build_dir, common_vars, build_vars, ssh_private_key_file, ssh_public_key_build, vm_id_override
+        ))
         return run_command(packer_args)
     finally:
         shutil.rmtree(ssh_key_tmpdir, ignore_errors=True)
+
+
+def _attempt_banner(attempt: int, attempts: int, rel: Path) -> None:
+    if attempt > 1:
+        print(
+            f"===== RETRY {attempt - 1}/{attempts - 1} for {rel} "
+            f"(waited {RETRY_DELAY_SECONDS}s) =====",
+            flush=True,
+        )
+
+
+def run_build_direct(build_dir: Path, common_vars: Path, args: argparse.Namespace) -> int:
+    """The old behaviour: packer builds straight onto the target VMID.
+
+    Kept ONLY for runs without Proxmox credentials, where nothing can be
+    queried, cloned or promoted. It carries the old hazard - with --overwrite,
+    `packer -force` destroys the existing template before building - and says
+    so out loud rather than pretending otherwise.
+    """
+    build_vars = build_dir / "variables.auto.pkrvars.hcl"
+    rel = build_dir.relative_to(repo_root())
+    print(
+        "WARNING: PROXMOX_URL/USERNAME/PASSWORD not set - building DIRECTLY on the "
+        "target VMID. With --overwrite this destroys the existing template BEFORE "
+        "the new one exists. Export the PROXMOX_* variables to get the "
+        "scratch-and-swap path instead.",
+        file=sys.stderr,
+    )
+    attempts = 1 if args.ask else 1 + max(0, args.retries)
+    for attempt in range(1, attempts + 1):
+        _attempt_banner(attempt, attempts, rel)
+        purge_stranded_build_vm(build_vars)
+        # Retries must overwrite whatever a failed attempt left behind.
+        status = run_packer(build_dir, common_vars, args, force=(args.overwrite or attempt > 1))
+        if status != 0:
+            print(f"packer build exited {status} for {rel} (attempt {attempt}/{attempts})", file=sys.stderr)
+            if attempt < attempts:
+                time.sleep(RETRY_DELAY_SECONDS)
+            continue
+        verified = verify_template_built(build_dir, build_vars)
+        if verified is True:
+            print(f"verified: template for {rel} is present in Proxmox")
+            return 0
+        if verified is None:
+            print(f"WARNING: cannot verify {rel} (no Proxmox query); trusting packer exit 0", file=sys.stderr)
+            return 0
+        print(f"packer reported success but NO template found for {rel} (attempt {attempt}/{attempts})",
+              file=sys.stderr)
+        if attempt < attempts:
+            time.sleep(RETRY_DELAY_SECONDS)
+    return 1
 
 
 def run_build(build_dir: Path, common_vars: Path, args: argparse.Namespace) -> int:
@@ -449,72 +691,97 @@ def run_build(build_dir: Path, common_vars: Path, args: argparse.Namespace) -> i
         return 1
 
     build_vars = build_dir / "variables.auto.pkrvars.hcl"
+    rel = build_dir.relative_to(repo_root())
 
     if args.skip:
         exists = template_exists(build_dir, build_vars)
         if exists is True:
-            rel = build_dir.relative_to(repo_root())
             print(f"Skipping {rel} (template already exists)")
             return 0
         if exists is None:
-            rel = build_dir.relative_to(repo_root())
-            print(
-                f"Skip requested but unable to query Proxmox; proceeding with {rel}",
-                file=sys.stderr,
-            )
+            print(f"Skip requested but unable to query Proxmox; proceeding with {rel}", file=sys.stderr)
+
+    target = parse_vm_id(build_vars)
+    prox = proxmox_client()
+    if prox is None or not target:
+        if not target:
+            print(f"NOTE: {rel} declares no vm_id; the scratch-and-swap path needs one", file=sys.stderr)
+        return run_build_direct(build_dir, common_vars, args)
+
+    # Refuse up front, not two hours in: replacing a live template is the one
+    # irreversible thing this script does, and it needs to have been asked for.
+    try:
+        current = find_vm(prox, target)
+    except Exception as exc:
+        print(f"ERROR: cannot query Proxmox for {target}: {exc}", file=sys.stderr)
+        return 1
+    if current is not None and not args.overwrite:
+        what = "template" if is_template(current) else "non-template VM"
+        print(
+            f"ERROR: a {what} already exists at VMID {target} ('{current.get('name', '')}'). "
+            "Pass --overwrite to replace it (only after the new build is verified) "
+            "or --skip to leave it.",
+            file=sys.stderr,
+        )
+        return 1
+
+    scratch = scratch_vm_id(target)
+    print(f"building at scratch VMID {scratch}; live template {target} is untouched until the result is verified",
+          flush=True)
 
     # --ask hands control to packer's interactive on-error prompt, so an
     # unattended retry loop would fight it; run exactly once in that mode.
     attempts = 1 if args.ask else 1 + max(0, args.retries)
-    rel = build_dir.relative_to(repo_root())
-
+    built = False
     for attempt in range(1, attempts + 1):
-        if attempt > 1:
-            print(
-                f"===== RETRY {attempt - 1}/{attempts - 1} for {rel} "
-                f"(waited {RETRY_DELAY_SECONDS}s) =====",
-                flush=True,
-            )
-        # Clear any non-template VM stranded on the output VMID (e.g. by a
-        # cancelled build) — packer's -force cannot replace a plain VM.
-        purge_stranded_build_vm(build_vars)
-        status = run_packer(
-            build_dir, common_vars, args, force_overwrite=(attempt > 1)
-        )
-
+        _attempt_banner(attempt, attempts, rel)
+        if not clear_scratch(prox, scratch):
+            return 1
+        # -force is always on for the scratch VMID: it is ours, and a retry
+        # must be able to replace whatever the previous attempt left there.
+        status = run_packer(build_dir, common_vars, args, force=True, vm_id_override=scratch)
         if status != 0:
+            print(f"packer build exited {status} for {rel} (attempt {attempt}/{attempts})", file=sys.stderr)
+            if attempt < attempts:
+                time.sleep(RETRY_DELAY_SECONDS)
+            continue
+        # Exit 0 is a claim, not proof: there must be a TEMPLATE at the scratch VMID.
+        try:
+            entry = find_vm(prox, scratch)
+        except Exception as exc:
+            print(f"ERROR: cannot query Proxmox after the build: {exc}", file=sys.stderr)
+            return 1
+        if not is_template_now(prox, entry):
             print(
-                f"packer build exited {status} for {rel} "
-                f"(attempt {attempt}/{attempts})",
+                f"packer reported success but there is no template at scratch VMID {scratch} "
+                f"for {rel} (attempt {attempt}/{attempts})",
                 file=sys.stderr,
             )
             if attempt < attempts:
                 time.sleep(RETRY_DELAY_SECONDS)
             continue
+        print(f"verified: template present at scratch VMID {scratch}")
+        built = True
+        break
 
-        # Exit 0 is a claim, not proof: confirm the template really exists.
-        if args.no_verify:
-            return 0
-        verified = verify_template_built(build_dir, build_vars)
-        if verified is True:
-            print(f"verified: template for {rel} is present in Proxmox")
-            return 0
-        if verified is None:
-            print(
-                f"WARNING: cannot verify {rel} (no/failed Proxmox query); "
-                "trusting packer exit 0 — set PROXMOX_* to enable verification",
-                file=sys.stderr,
-            )
-            return 0
+    if not built:
+        print(f"no usable template produced for {rel}; live template {target} untouched", file=sys.stderr)
+        return 1
+
+    if args.no_verify:
+        print("NOTE: --no-verify - skipping the clone-boot check before promotion", file=sys.stderr)
+    elif not run_clone_verify(scratch):
         print(
-            f"packer reported success but NO template found for {rel} "
-            f"(attempt {attempt}/{attempts})",
+            f"clone-verify FAILED for scratch template {scratch}; live template {target} untouched. "
+            f"The scratch is left in place for inspection.",
             file=sys.stderr,
         )
-        if attempt < attempts:
-            time.sleep(RETRY_DELAY_SECONDS)
+        return 1
 
-    return 1
+    if not promote_scratch(prox, scratch, target):
+        return 1
+    print(f"verified: template for {rel} is live at {target}")
+    return 0
 
 
 def main() -> int:
