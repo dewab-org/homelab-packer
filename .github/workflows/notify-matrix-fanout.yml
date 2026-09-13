@@ -23,16 +23,19 @@ on:
 
 permissions:
   contents: read
+  actions: read # to ask whether the cancelled run ever actually started
 
 jobs:
   notify:
     name: Announce fan-out failure
-    # failure OR cancelled. The fan-out runs on a GitHub-HOSTED runner, which has
-    # a hard 6-hour cap that no timeout-minutes can raise - and nine serial
-    # builds do not fit in 6h, so every run since 2026-08-16 has ended
-    # `cancelled` at exactly 6h00m. On 09-12 this watcher triggered on that and
-    # SKIPPED, because it only looked for `failure`. The one outcome the weekly
-    # rebuild actually produces was the one it ignored.
+    # failure OR cancelled. A cancelled fan-out is usually the outcome worth
+    # hearing about: a job that hits its timeout-minutes, or (before 09-12, when
+    # this was one job) the 6h hosted-runner cap, both end `cancelled`, and on
+    # 09-12 this watcher SKIPPED exactly that because it only looked for
+    # `failure`. But `cancelled` also covers a run that never started at all -
+    # GitHub keeps one pending run per concurrency group, so two merges seconds
+    # apart cancel the first before it does anything. The step below asks the
+    # API whether any job actually ran and stays quiet if none did.
     if: contains(fromJSON('["failure","cancelled"]'), github.event.workflow_run.conclusion)
     runs-on: arc-runners
     timeout-minutes: 10
@@ -45,6 +48,10 @@ jobs:
           VAULT_CA: ${{ secrets.VAULT_CACERT }}
           WF: build-templates (weekly fan-out)
           STATUS: ${{ github.event.workflow_run.conclusion }}
+          GH_TOKEN: ${{ github.token }}
+          RUN_ID: ${{ github.event.workflow_run.id }}
+          RUN_STARTED: ${{ github.event.workflow_run.run_started_at }}
+          RUN_UPDATED: ${{ github.event.workflow_run.updated_at }}
           REPO: ${{ github.repository }}
           REF: ${{ github.event.workflow_run.head_branch }}
           EVENT: ${{ github.event.workflow_run.event }}
@@ -56,6 +63,32 @@ jobs:
           # Nothing here depends on a checkout, so a broken repo state cannot
           # silence the notification.
           fail() { echo "::error::Matrix notify: $*"; exit 1; }
+
+          # Did the cancelled run ever DO anything? GitHub keeps one pending run
+          # per concurrency group, so a run superseded by a newer push is
+          # "cancelled" with zero jobs started. That is routine, not an incident,
+          # and paging on it would teach people to ignore this room. Ask the API
+          # for the run's jobs; if none has a started_at, stay quiet.
+          export DURATION="unknown duration"
+          if [ "$STATUS" = "cancelled" ]; then
+            jobs="$(curl -sS -H "Authorization: Bearer $GH_TOKEN" -H "Accept: application/vnd.github+json" \
+                      "https://api.github.com/repos/$REPO/actions/runs/$RUN_ID/jobs?per_page=100")"
+            started="$(printf '%s' "$jobs" | python3 -c 'import sys,json; print(sum(1 for j in json.load(sys.stdin).get("jobs",[]) if j.get("started_at")))' 2>/dev/null || echo "?")"
+            if [ "$started" = "0" ]; then
+              echo "fan-out run $RUN_ID was cancelled before any job started (superseded by a newer push, or cancelled while queued) - nothing to announce."
+              exit 0
+            fi
+            echo "cancelled run $RUN_ID had $started job(s) that started - announcing."
+          fi
+          DURATION="$(python3 -c '
+          import os, datetime as d
+          try:
+              p = lambda s: d.datetime.fromisoformat(s.replace("Z", "+00:00"))
+              secs = int((p(os.environ["RUN_UPDATED"]) - p(os.environ["RUN_STARTED"])).total_seconds())
+              print(f"{secs // 3600}h {secs % 3600 // 60:02d}m")
+          except Exception:
+              print("unknown duration")')"
+          export DURATION
 
           printf '%s' "$VAULT_CA" > /tmp/notify-ca.pem
           sa=/var/run/secrets/kubernetes.io/serviceaccount/token
@@ -83,10 +116,15 @@ jobs:
           wf, repo = os.environ["WF"], os.environ["REPO"]
           ref, ev, url = os.environ["REF"], os.environ["EVENT"], os.environ["RUN_URL"]
           status = os.environ.get("STATUS", "failure")
+          dur = os.environ.get("DURATION", "unknown duration")
           if status == "cancelled":
-              why = "Cancelled - on a GitHub-hosted runner that is the 6-hour hard cap, so later pipelines in the serial list were never dispatched."
+              # Do not assert a cause; give the reader what distinguishes them.
+              why = ("Cancelled after " + dur + " with at least one template job started. "
+                     "Close to 6h00m on a hosted runner means the hard cap; otherwise someone "
+                     "or something cancelled it, and later pipelines in the serial list were "
+                     "never dispatched.")
           else:
-              why = "No templates may have been built at all."
+              why = "Failed after " + dur + ". No templates may have been built at all."
           plain = (status.upper() + ": " + wf + "\n" + repo + " - branch " + ref + ", triggered by " + ev
                    + "\n" + why + "\n" + url)
           html = ("&#10060; <b>" + wf + "</b> " + status + "<br/>"

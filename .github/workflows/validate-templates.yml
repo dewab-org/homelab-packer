@@ -85,6 +85,10 @@ jobs:
           echo "Vault login succeeded and secret/packer is readable."
 
       - name: Run pre-commit checks
+        # Step timeouts (here and below) so a hang fails the STEP - a real
+        # failure() the notifier reports - instead of being cancelled at the
+        # job cap. Their sum stays under the job's 120.
+        timeout-minutes: 40
         shell: bash
         run: |
           set -euo pipefail
@@ -94,6 +98,7 @@ jobs:
           pre-commit run --all-files
 
       - name: Check Ansible syntax
+        timeout-minutes: 15
         shell: bash
         run: |
           set -euo pipefail
@@ -103,6 +108,7 @@ jobs:
           done < <(find builds/linux -path '*/ansible/configure.yml' | sort)
 
       - name: Validate templates
+        timeout-minutes: 60
         shell: bash
         run: |
           set -euo pipefail
@@ -112,8 +118,13 @@ jobs:
       # Identical to the step of the same name in _build-test-template.yml; see
       # there for why it is self-contained and why it never fails the job.
       - name: Notify Matrix on failure
-        # failure() OR cancelled() - see the same step in _build-test-template.yml.
-        if: failure() || cancelled()
+        # failure() ONLY here - deliberately unlike _build-test-template.yml.
+        # This workflow runs with cancel-in-progress: true, so every push that
+        # lands while a validation is running cancels it. That is routine, and
+        # announcing it as "a timeout kill" (which is what happened when #3 and
+        # #4 merged seconds apart) would teach people to ignore #alerts-ci. A
+        # genuine hang is turned into a real failure by the step timeouts above.
+        if: failure()
         shell: bash
         env:
           VAULT_CA: ${{ secrets.VAULT_CACERT }}
