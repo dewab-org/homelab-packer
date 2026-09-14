@@ -1,22 +1,46 @@
 name: build-templates
 
-# Weekly "rebuild everything" for drift detection — dispatches each CLOUD
-# per-template pipeline (template-*-cloud) serially and waits for each, so every
-# template's own badge reflects the weekly run. They share the
-# packer-target-environment concurrency group and must not overlap, hence the
-# serial dispatch. Runs on a GitHub-hosted runner (NOT arc-runners) so it does
-# not hold a self-hosted runner that the dispatched builds themselves need.
+# Serial dispatcher for the per-template pipelines: the seven Linux cloud
+# builds (template-*-cloud) and the four Windows ISO builds (template-windows-*-iso).
+# Two jobs: the weekly "rebuild everything" drift check, and — since 2026-09-12 —
+# the owner of every SHARED build input, so a change to one is verified across
+# the templates it affects instead of self-cancelling the rest. Dispatches each
+# pipeline serially and waits for each, so every template's own badge reflects
+# the run. They share the packer-target-environment concurrency group and must
+# not overlap, hence the serial dispatch. Runs on a GitHub-hosted runner (NOT
+# arc-runners) so it does not hold a self-hosted runner that the dispatched
+# builds themselves need; the cost is that it cannot reach Matrix itself, which
+# is what notify-matrix-fanout.yml is for.
 #
-# ISO builds are by-hand only — their template-*-iso workflows are disabled.
+# Since 2026-09-13 every build goes through build.py's scratch-and-swap: the
+# new template is built at vm_id + 10000, clone-booted, and only then swapped
+# onto the live VMID - so a failed weekly rebuild leaves the previous template
+# in place instead of destroying it first (which is how both Windows cloud
+# templates were lost).
 
 on:
   schedule:
     # Sundays 14:00 UTC (09:00 CDT). Clear of the nightly job band.
     - cron: "0 14 * * 0"
+  push:
+    branches: [main]
+    # SHARED inputs live here, not on the per-template pipelines. A change to any
+    # of these affects several templates; firing their eleven workflows directly
+    # would leave 1 running + 1 pending and CANCEL the other 9 (they all share
+    # the packer-target-environment group). Routing them here instead dispatches
+    # the affected pipelines SERIALLY. Deliberately excludes this file itself: a
+    # tweak to the orchestrator should not cost a full eleven-template rebuild.
+    paths:
+      - "builds/linux/ansible/**"
+      - "builds/linux/common/**"
+      - "builds/windows/common/**"
+      - "build.py"
+      - "tests/clone-verify.py"
+      - ".github/workflows/_build-test-template.yml"
   workflow_dispatch:
     inputs:
       templates:
-        description: "Cloud pipeline workflow names to run (space-separated; blank = all 9)"
+        description: "Pipeline workflow names to run (space-separated; blank = all 11: 7 Linux cloud + 4 Windows ISO)"
         required: false
         default: ""
         type: string
@@ -29,60 +53,155 @@ concurrency:
   group: build-templates-fanout
   cancel-in-progress: false
 
+
 jobs:
-  fan-out:
-    name: Weekly cloud rebuild (fan-out)
+  select:
+    name: Select templates
     runs-on: ubuntu-latest
-    timeout-minutes: 720
+    timeout-minutes: 10
+    outputs:
+      list: ${{ steps.pick.outputs.list }}
+      count: ${{ steps.pick.outputs.count }}
     env:
       GH_TOKEN: ${{ github.token }}
       REPO: ${{ github.repository }}
     steps:
-      - name: Dispatch each cloud pipeline serially and wait
+      - name: Decide which cloud pipelines to rebuild
+        id: pick
         shell: bash
         run: |
           set -uo pipefail
-          wfs="${{ github.event.inputs.templates }}"
-          if [ -z "$wfs" ]; then
-            wfs="template-rhel-8-cloud template-rhel-9-cloud template-rhel-10-cloud \
+          LINUX="template-rhel-8-cloud template-rhel-9-cloud template-rhel-10-cloud \
                  template-rocky-8-cloud template-rocky-9-cloud template-rocky-10-cloud \
-                 template-ubuntu-24.04-cloud template-windows-2022-cloud template-windows-2025-cloud"
-          fi
-          # SERIAL BY NECESSITY — do not parallelise this loop.
-          # There is ONE Proxmox target and the builds share VMID ranges (each
-          # build VM lands on the template's own VMID; clone-verify clones into
-          # 9600+), so two running at once would collide (VMID clashes, DHCP,
-          # resource contention). We dispatch one pipeline, block on it with
-          # `gh run watch` until it finishes, then start the next. The shared
-          # `packer-target-environment` concurrency group enforces the same rule
-          # from the other side: firing all nine at once would leave 1 running +
-          # 1 pending and CANCEL the other 7. Parallelism would require multiple
-          # Proxmox targets or non-overlapping VMID/clone ranges per template.
-          overall=0
-          summary=()
-          for wf in $wfs; do
-            echo "::group::$wf"
-            prev="$(gh run list --repo "$REPO" --workflow "$wf.yml" --limit 1 --json databaseId -q '.[0].databaseId // "0"')"
-            gh workflow run "$wf.yml" --repo "$REPO"
-            # Wait for a NEW run to appear; fail loudly if the dispatch produced
-            # none (e.g. GITHUB_TOKEN lacking workflow_dispatch rights -> use a PAT).
-            rid=""
-            for _ in $(seq 1 20); do
-              sleep 6
-              cur="$(gh run list --repo "$REPO" --workflow "$wf.yml" --limit 1 --json databaseId -q '.[0].databaseId // "0"')"
-              if [ "$cur" != "$prev" ]; then rid="$cur"; break; fi
-            done
-            if [ -z "$rid" ]; then
-              echo "ERROR: no new run for $wf after dispatch (token may lack workflow_dispatch rights)"
-              overall=1; summary+=("$wf: NO-RUN"); echo "::endgroup::"; continue
+                 template-ubuntu-24.04-cloud"
+          # Windows is built from ISO. The VHD-based "cloud" pipelines were
+          # retired on 2026-09-13: their base images were the 2021 Azure eval
+          # VHDs (20348.169, last hotfix 2021-08-07), the current cumulative
+          # update can no longer be applied to them (0x8007000D, forever), and
+          # neither template had been buildable since windows-update was added
+          # on 2026-08-11. The ISO builds start from the same media and patch
+          # cleanly. ~2h each, so they run LAST.
+          WINDOWS="template-windows-2022-core-iso template-windows-2022-desktop-experience-iso \
+                   template-windows-2025-core-iso template-windows-2025-desktop-experience-iso"
+          ALL="$LINUX $WINDOWS"
+
+          wfs="${{ github.event.inputs.templates }}"
+          if [ -n "$wfs" ]; then
+            echo "Explicit template list from workflow_dispatch."
+          elif [ "${{ github.event_name }}" != "push" ]; then
+            # schedule, or a dispatch with a blank list: rebuild everything.
+            wfs="$ALL"
+          else
+            # Push to a shared path. Rebuild only the templates that path can
+            # actually affect -- a builds/windows/common change has no business
+            # spending hours rebuilding seven Linux templates, and vice versa.
+            before="${{ github.event.before }}"
+            changed=""
+            if [ -n "$before" ] && [ "$before" != "0000000000000000000000000000000000000000" ]; then
+              changed="$(gh api "repos/$REPO/compare/$before...${{ github.sha }}" \
+                          --jq '.files[].filename' 2>/dev/null)"
             fi
-            gh run watch "$rid" --repo "$REPO" --exit-status >/dev/null 2>&1 || true
-            concl="$(gh run view "$rid" --repo "$REPO" --json conclusion -q '.conclusion')"
-            echo "$wf -> $concl (run $rid)"
-            [ "$concl" = "success" ] || overall=1
-            summary+=("$wf: $concl")
-            echo "::endgroup::"
+            if [ -z "$changed" ]; then
+              # Force-push, new branch, or a compare the API would not serve.
+              # Fail SAFE (rebuild all), never silently skip: an unverified
+              # shared change is exactly how two weeks of red went unnoticed.
+              echo "::warning::could not determine changed files; rebuilding ALL templates"
+              wfs="$ALL"
+            else
+              echo "Changed files:"; echo "$changed" | sed 's/^/  /'
+              if echo "$changed" | grep -qE '^(build\.py|tests/clone-verify\.py|\.github/workflows/_build-test-template\.yml)$'; then
+                wfs="$ALL"
+              else
+                echo "$changed" | grep -qE '^builds/linux/(ansible|common)/' && wfs="$wfs $LINUX"
+                echo "$changed" | grep -qE '^builds/windows/common/'          && wfs="$wfs $WINDOWS"
+              fi
+            fi
+          fi
+
+          wfs="$(echo "$wfs" | tr -s ' \n' ' ' | sed 's/^ //;s/ $//')"
+          if [ -z "$wfs" ]; then
+            echo "No template pipeline is affected by this change; nothing to do."
+            echo "list=[]"  >> "$GITHUB_OUTPUT"
+            echo "count=0"  >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          echo "Templates to rebuild: $wfs"
+          echo "list=$(printf '%s\n' $wfs | jq -R . | jq -cs .)" >> "$GITHUB_OUTPUT"
+          echo "count=$(echo $wfs | wc -w | tr -d ' ')" >> "$GITHUB_OUTPUT"
+
+  # ONE JOB PER TEMPLATE, run one at a time.
+  #
+  # This used to be a single job looping over every template. That job could
+  # never finish: GitHub terminates any job at 6 HOURS of execution regardless
+  # of timeout-minutes (the old value, 720, was unachievable and merely looked
+  # generous). Seven Linux templates take ~2h50 and each Windows build is capped
+  # at 5h by _build-test-template.yml, so the full pass always blew the wall --
+  # on 2026-09-12 it was killed at exactly 06:00:14 while waiting on
+  # windows-2022, after five templates had already gone green. The orchestrator
+  # had never once completed: every run since August was cancelled or failed.
+  #
+  # A matrix gives each template its OWN job and therefore its own 6h budget,
+  # while max-parallel: 1 keeps them strictly serial -- still mandatory, because
+  # there is ONE Proxmox target and builds share VMID ranges (build VMs land on
+  # the template's own VMID, clone-verify clones into 9600+), so two at once
+  # would collide. The packer-target-environment group on the template pipelines
+  # enforces the same rule from the other side. fail-fast: false so one bad
+  # template does not cancel the rest of the run.
+  build:
+    name: ${{ matrix.wf }}
+    needs: select
+    if: needs.select.outputs.count != '0'
+    runs-on: ubuntu-latest
+    # Under GitHub's 6h ceiling, with room for the 5h cap on the build it waits on.
+    timeout-minutes: 350
+    strategy:
+      max-parallel: 1
+      fail-fast: false
+      matrix:
+        wf: ${{ fromJson(needs.select.outputs.list) }}
+    env:
+      GH_TOKEN: ${{ github.token }}
+      REPO: ${{ github.repository }}
+    steps:
+      - name: Dispatch and wait
+        shell: bash
+        run: |
+          set -uo pipefail
+          wf="${{ matrix.wf }}"
+          prev="$(gh run list --repo "$REPO" --workflow "$wf.yml" --limit 1 --json databaseId -q '.[0].databaseId // "0"')"
+          gh workflow run "$wf.yml" --repo "$REPO"
+          # Wait for a NEW run to appear; fail loudly if the dispatch produced
+          # none (e.g. GITHUB_TOKEN lacking workflow_dispatch rights -> use a PAT).
+          rid=""
+          for _ in $(seq 1 20); do
+            sleep 6
+            cur="$(gh run list --repo "$REPO" --workflow "$wf.yml" --limit 1 --json databaseId -q '.[0].databaseId // "0"')"
+            if [ "$cur" != "$prev" ]; then rid="$cur"; break; fi
           done
-          echo "===== SUMMARY ====="
-          for s in "${summary[@]}"; do echo "  $s"; done
-          exit "$overall"
+          if [ -z "$rid" ]; then
+            echo "::error::no new run for $wf after dispatch (token may lack workflow_dispatch rights)"
+            exit 1
+          fi
+          echo "Watching https://github.com/$REPO/actions/runs/$rid"
+          gh run watch "$rid" --repo "$REPO" --exit-status >/dev/null 2>&1 || true
+          concl="$(gh run view "$rid" --repo "$REPO" --json conclusion -q '.conclusion')"
+          echo "$wf -> $concl (run $rid)"
+          echo "$wf -> $concl ([run $rid](https://github.com/$REPO/actions/runs/$rid))" >> "$GITHUB_STEP_SUMMARY"
+          [ "$concl" = "success" ]
+
+  summary:
+    name: Summary
+    needs: [select, build]
+    if: always()
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Report
+        shell: bash
+        run: |
+          echo "Selected: ${{ needs.select.outputs.list }}"
+          echo "Build result: ${{ needs.build.result }}"
+          case "${{ needs.build.result }}" in
+            success|skipped) echo "All selected templates rebuilt cleanly." ;;
+            *) echo "::error::at least one template pipeline did not succeed"; exit 1 ;;
+          esac

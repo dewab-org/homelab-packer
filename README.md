@@ -37,8 +37,9 @@ Building templates needs the homelab's build plumbing:
   images (`/cdimages/`), backed by `nas.viking.org:/mnt/pool0/cdimages`.
 - **Red Hat account/subscription** — RHEL builds register to RHN during the
   build (creds from Vault) and unregister before templating.
-- **Microsoft evaluation VHD/VHDX** — Windows cloud bases are imported from
-  these (mirrored in the cdimages repo).
+- **Microsoft evaluation ISOs** — Windows templates are installed from the eval
+  ISOs on the mirror (`/cdimages/Microsoft/`). The VHD/VHDX-based "cloud" path
+  was retired on 2026-09-13; see *Windows cloud images (retired)* below.
 
 ### Toolchain (local by-hand builds)
 
@@ -82,14 +83,22 @@ serially, so every badge above reflects the weekly run too.
 | Rocky 9 cloud | [![template-rocky-9-cloud](https://github.com/dewab-org/homelab-packer/actions/workflows/template-rocky-9-cloud.yml/badge.svg)](https://github.com/dewab-org/homelab-packer/actions/workflows/template-rocky-9-cloud.yml) |
 | Rocky 10 cloud | [![template-rocky-10-cloud](https://github.com/dewab-org/homelab-packer/actions/workflows/template-rocky-10-cloud.yml/badge.svg)](https://github.com/dewab-org/homelab-packer/actions/workflows/template-rocky-10-cloud.yml) |
 | Ubuntu 24.04 cloud | [![template-ubuntu-24.04-cloud](https://github.com/dewab-org/homelab-packer/actions/workflows/template-ubuntu-24.04-cloud.yml/badge.svg)](https://github.com/dewab-org/homelab-packer/actions/workflows/template-ubuntu-24.04-cloud.yml) |
-| Windows Server 2022 cloud | [![template-windows-2022-cloud](https://github.com/dewab-org/homelab-packer/actions/workflows/template-windows-2022-cloud.yml/badge.svg)](https://github.com/dewab-org/homelab-packer/actions/workflows/template-windows-2022-cloud.yml) |
-| Windows Server 2025 cloud | [![template-windows-2025-cloud](https://github.com/dewab-org/homelab-packer/actions/workflows/template-windows-2025-cloud.yml/badge.svg)](https://github.com/dewab-org/homelab-packer/actions/workflows/template-windows-2025-cloud.yml) |
+| Windows Server 2022 Core ISO | [![template-windows-2022-core-iso](https://github.com/dewab-org/homelab-packer/actions/workflows/template-windows-2022-core-iso.yml/badge.svg)](https://github.com/dewab-org/homelab-packer/actions/workflows/template-windows-2022-core-iso.yml) |
+| Windows Server 2022 Desktop ISO | [![template-windows-2022-desktop-experience-iso](https://github.com/dewab-org/homelab-packer/actions/workflows/template-windows-2022-desktop-experience-iso.yml/badge.svg)](https://github.com/dewab-org/homelab-packer/actions/workflows/template-windows-2022-desktop-experience-iso.yml) |
+| Windows Server 2025 Core ISO | [![template-windows-2025-core-iso](https://github.com/dewab-org/homelab-packer/actions/workflows/template-windows-2025-core-iso.yml/badge.svg)](https://github.com/dewab-org/homelab-packer/actions/workflows/template-windows-2025-core-iso.yml) |
+| Windows Server 2025 Desktop ISO | [![template-windows-2025-desktop-experience-iso](https://github.com/dewab-org/homelab-packer/actions/workflows/template-windows-2025-desktop-experience-iso.yml/badge.svg)](https://github.com/dewab-org/homelab-packer/actions/workflows/template-windows-2025-desktop-experience-iso.yml) |
 
-### ISO/kickstart templates — by-hand, disabled
+Windows is built from ISO (the four rows above). Each is a full Windows Setup
+plus Windows Update, about two hours, so they run last in the weekly fan-out.
+The former VHD-based `template-windows-*-cloud` pipelines were retired on
+2026-09-13 (see *Windows cloud images (retired)*).
 
-ISO builds mirror the same per-template structure (`template-*-iso.yml`) but are
-**`workflow_dispatch`-only and `gh workflow disable`d**: they are slow and
-fragile (installer boot-command timing), so they never run on push or schedule.
+### Linux ISO/kickstart templates — by-hand, disabled
+
+The Linux ISO builds mirror the same per-template structure (`template-*-iso.yml`)
+but are **`workflow_dispatch`-only and `gh workflow disable`d**: the cloud-image
+builds produce the same result in minutes, while the installer-driven builds are
+slow and fragile (boot-command timing), so they never run on push or schedule.
 Enable + dispatch a pipeline when you specifically need a CI ISO rebuild, or
 just run `./build.py builds/linux/<os>/<ver>-iso` locally.
 
@@ -102,10 +111,6 @@ just run `./build.py builds/linux/<os>/<ver>-iso` locally.
 | Rocky 9 ISO | [![template-rocky-9-iso](https://github.com/dewab-org/homelab-packer/actions/workflows/template-rocky-9-iso.yml/badge.svg)](https://github.com/dewab-org/homelab-packer/actions/workflows/template-rocky-9-iso.yml) |
 | Rocky 10 ISO | [![template-rocky-10-iso](https://github.com/dewab-org/homelab-packer/actions/workflows/template-rocky-10-iso.yml/badge.svg)](https://github.com/dewab-org/homelab-packer/actions/workflows/template-rocky-10-iso.yml) |
 | Ubuntu 24.04 ISO | [![template-ubuntu-24.04-iso](https://github.com/dewab-org/homelab-packer/actions/workflows/template-ubuntu-24.04-iso.yml/badge.svg)](https://github.com/dewab-org/homelab-packer/actions/workflows/template-ubuntu-24.04-iso.yml) |
-| Windows Server 2022 Core ISO | [![template-windows-2022-core-iso](https://github.com/dewab-org/homelab-packer/actions/workflows/template-windows-2022-core-iso.yml/badge.svg)](https://github.com/dewab-org/homelab-packer/actions/workflows/template-windows-2022-core-iso.yml) |
-| Windows Server 2022 Desktop ISO | [![template-windows-2022-desktop-experience-iso](https://github.com/dewab-org/homelab-packer/actions/workflows/template-windows-2022-desktop-experience-iso.yml/badge.svg)](https://github.com/dewab-org/homelab-packer/actions/workflows/template-windows-2022-desktop-experience-iso.yml) |
-| Windows Server 2025 Core ISO | [![template-windows-2025-core-iso](https://github.com/dewab-org/homelab-packer/actions/workflows/template-windows-2025-core-iso.yml/badge.svg)](https://github.com/dewab-org/homelab-packer/actions/workflows/template-windows-2025-core-iso.yml) |
-| Windows Server 2025 Desktop ISO | [![template-windows-2025-desktop-experience-iso](https://github.com/dewab-org/homelab-packer/actions/workflows/template-windows-2025-desktop-experience-iso.yml/badge.svg)](https://github.com/dewab-org/homelab-packer/actions/workflows/template-windows-2025-desktop-experience-iso.yml) |
 
 ## Layout
 
@@ -118,8 +123,7 @@ unambiguous.
 - `builds/linux/rocky/{8,9,10}-cloud`: Rocky cloud-image (GenericCloud qcow2) builds.
 - `builds/linux/ubuntu/24.04-iso`: Ubuntu 24.04 autoinstall (ISO) build.
 - `builds/linux/ubuntu/24.04-cloud`: Ubuntu 24.04 cloud-image build.
-- `builds/windows/windows-server-{2022,2025}-desktop-experience-cloud`: Windows Server cloud builds, cloned from a Microsoft evaluation VHD/VHDX (the maintained Windows path).
-- `builds/windows/windows-server-{2022,2025}-{core,desktop-experience}-iso`: Windows Server ISO builds (Core = image index 1, Desktop Experience = index 2).
+- `builds/windows/windows-server-{2022,2025}-{core,desktop-experience}-iso`: Windows Server ISO builds (Core = image index 1, Desktop Experience = index 2) — the maintained Windows path since the VHD-based cloud builds were retired on 2026-09-13.
 - `builds/windows/windows-10-iso`: Windows 10 ISO stub.
 - `ca/`: Custom CA certificates applied by Linux configure playbooks.
 - `build.py`: Init, validate, or build one or all templates.
@@ -174,9 +178,12 @@ CI follows the same rule. Pushes are handled by the per-template pipelines
 (`template-*.yml`), each path-filtered to an allowlist of *only its own build
 inputs*, so a change rebuilds just the affected cloud template(s) — never the
 ISO builds (there are no ISO pipelines) and never on docs (`.md`). The
-`build-templates` workflow no longer runs on push; it is a weekly/manual
-fan-out that re-runs the cloud per-template pipelines (drift detection). ISO
-builds are by-hand only — their `template-*-iso` pipelines are disabled.
+`build-templates` is the weekly/manual fan-out that re-runs every active
+per-template pipeline serially (drift detection) — the seven Linux cloud builds
+and the four Windows ISO builds — and since 2026-09-12 it also owns pushes to
+SHARED inputs, dispatching only the pipelines a change can affect. The Linux
+`template-*-iso` pipelines are by-hand only and disabled; the Windows ISO
+pipelines are enabled, because ISO is the Windows path.
 
 ## Clone verification
 
@@ -199,7 +206,7 @@ Checks per clone:
 ```sh
 set -a && source .env && set +a
 export PROXMOX_URL=... PROXMOX_USERNAME=... PROXMOX_PASSWORD=... PROXMOX_NODE=...
-./tests/clone-verify.py 9239 9432          # rocky-9 + win-2022, or any VMIDs
+./tests/clone-verify.py 9239 9413          # rocky-9 + win-2022 desktop, or any VMIDs
 ```
 
 Each per-template pipeline runs it as its final step (build → clone-verify), and
@@ -280,10 +287,10 @@ flowchart TD
     lb --> lc --> ls --> la --> lu --> lx --> lt
   end
 
-  subgraph win["Windows — Server 2022 / 2025"]
-    wb["import Microsoft eval VHDX<br/>base template · SATA · 40G / 64G"]:::base
-    wc["packer proxmox-clone<br/>clone base → boot → WinRM"]:::clone
-    wo["offline unattend inject<br/>autounattend → Panther"]:::seed
+  subgraph win["Windows — Server 2022 / 2025 (ISO)"]
+    wb["Microsoft eval ISO<br/>from the mirror · OVMF/q35 · 80G"]:::base
+    wc["packer proxmox-iso<br/>boot_command → Windows Setup → WinRM"]:::clone
+    wo["autounattend on the cd_content ISO<br/>edition by windows_image_index"]:::seed
     wu["Windows Update (rgl plugin)<br/>full patch · reboots until clean"]:::update
     wp["PowerShell provisioners<br/>qemu-ga · virtio tools · lab CA · RDP/SSH<br/>EMS/SAC (bcdedit) · Cloudbase-Init · cleanup"]:::prov
     wt["template<br/>cloud-init drive (ide2) · VGA + serial + EMS"]:::tmpl
@@ -335,12 +342,19 @@ flowchart TD
 The `+20/+30` arithmetic does not extend cleanly to Windows (Ubuntu already
 breaks it too), so the Windows allocation is an explicit table:
 
-| Build | ISO | cloud-base | cloud |
-| --- | --- | --- | --- |
-| Server 2022 Core | 9411 | 9421 *(planned — no Core VHD)* | 9431 *(planned — no Core VHD)* |
-| Server 2022 Desktop Experience | 9413 | 9422 | 9432 |
-| Server 2025 Core | 9401 | 9423 *(planned — no Core VHD)* | 9433 *(planned — no Core VHD)* |
-| Server 2025 Desktop Experience | 9403 | 9424 | 9434 |
+| Build | ISO template | scratch during a build |
+| --- | --- | --- |
+| Server 2022 Core | 9411 | 19411 |
+| Server 2022 Desktop Experience | 9413 | 19413 |
+| Server 2025 Core | 9401 | 19401 |
+| Server 2025 Desktop Experience | 9403 | 19403 |
+
+The scratch column is `build.py`'s doing, for every build family: a new
+template is built at `vm_id + 10000`, clone-booted, and only then swapped onto
+the live VMID (a full clone back, so the VMID that `homelab.proxmox` pins never
+changes). A failed rebuild leaves the previous template untouched. `9422` and
+`9424` still exist as the dormant VHD bases of the retired cloud path; `9432`
+and `9434` are gone (see below).
 
 `9402` is intentionally free. An early Server 2025 desktop-experience build
 landed there on 2026-03-12 and was superseded by a rebuild at `9403` on
@@ -349,32 +363,32 @@ template rather than renumbering a working one. `9401` was likewise carrying a
 misleading `-base` suffix in Proxmox — it is an ISO build, not a cloud base —
 and has been renamed to match this table.
 
-### Windows cloud images
+### Windows cloud images (retired 2026-09-13)
 
-Built by cloning a base template imported from a Microsoft evaluation VHD/VHDX,
-which skips Windows Setup entirely (no `boot_command`, no keystroke timing).
+There used to be a second Windows path: clone a base template imported from a
+Microsoft evaluation VHD/VHDX (`9422`/`9424`), skipping Windows Setup, and
+produce `9432`/`9434`. It was retired because it could no longer produce a
+patched template at all:
 
-| Template | Firmware | Disk |
-| --- | --- | --- |
-| `9432 windows-server-2022-desktop-experience-cloud` | SeaBIOS (MBR) | 40 G |
-| `9434 windows-server-2025-desktop-experience-cloud` | OVMF (GPT) | 64 G |
+- The eval VHDs are the **2021 GA images** (`20348.169`, newest hotfix
+  2021-08-07, MBR/BIOS). Since `windows-update` was added to the cloud builds on
+  2026-08-11, every run looped on the current cumulative update — offered as a
+  26 GB full package, "installed", rebooted in 50 seconds with no servicing
+  phase, and offered again. The guest's Setup log said why on every attempt:
+  `Package KB5122882 failed to be changed to the Installed state. Status:
+  0x8007000D`. Not disk space (23 GB free); the image itself. The ISO builds
+  start from the same `20348.169` media and patch cleanly.
+- The loop ran until the job's 5-hour cap, and because CI rebuilt with
+  `packer -force` — destroy first, then build — both templates were lost
+  (`9432` on 2026-09-12, `9434` on 2026-08-23) and never came back. That
+  failure mode is what `build.py`'s scratch-and-swap now prevents for every
+  build.
 
-**The base templates (9422/9424) are disposable clone sources** — each is a
-small VHDX import kept only so Packer can clone without re-importing, and can be
-deleted to reclaim pool space. Recreate them if missing before building:
-
-```sh
-set -a && source .env && set +a
-builds/windows/common/scripts/reimport-windows-base.sh both   # or 2022 / 2025
-./build.py builds/windows/windows-server-2022-desktop-experience-cloud
-```
-
-That wrapper renders the answer file from `autounattend-vhd.pkrtpl.xml` with the
-Vault build credentials and injects it offline into
-`\Windows\Panther\unattend.xml`. Do not skip it and hand-copy an old
-`unattend.xml`: OOBE reads answer files only from fixed on-disk locations (the
-removable-media search is a Windows *Setup* behaviour), and a stale one leaves
-the guest sitting at OOBE with no obvious error.
+The build directories, `cloud-clone-build.pkr.hcl`, the VHD re-import wrapper
+and the two `template-windows-*-cloud` workflows were removed. `9422`/`9424`
+were left on Proxmox as dormant bases; delete them when you are sure they are
+not wanted (`qm destroy 9422 --purge`), since the VHD/VHDX files are no longer
+on the mirror and re-importing would mean downloading from Microsoft again.
 
 **Cloud-init works on these templates.** Cloudbase-Init 1.1.8 is installed from
 the project's GitHub releases (`cloudbase.it` times out from this lab; GitHub
@@ -384,10 +398,12 @@ templates also carry **both consoles**: a `std` VGA display and a serial device
 with **EMS/SAC enabled on COM1** (`bcdedit /ems … EMSPORT:1 EMSBAUDRATE:115200`,
 self-verified in the build), so the guest is reachable on the serial line too.
 
-**Fully patched at build.** Every Windows build (cloud **and** ISO) runs the
-`rgl/windows-update` provisioner first (Windows Update Agent, rebooting until no
-updates remain), so rebuilds ship current. This needs Windows Update egress and
-can add significant time off an old base — that's the point.
+**Fully patched at build.** Every Windows build runs the `rgl/windows-update`
+provisioner (Windows Update Agent, rebooting until no updates remain), so
+rebuilds ship current. This needs Windows Update egress and adds real time —
+that's the point. The `Build template` step carries a 270-minute timeout so a
+patch loop fails the step (and is reported to Matrix) instead of being killed
+silently at the job cap.
 
 One known gap, deliberate:
 
@@ -397,12 +413,12 @@ One known gap, deliberate:
   boot-critical. A fix needs a scratch virtio-scsi disk attached during the
   build so Windows enumerates the controller first.
 
-**Edition selection differs between the two paths.** An ISO carries several
-editions in `install.wim` and the build picks one with `windows_image_index`
-(`1` = Core, `2` = Desktop Experience). A VHD/VHDX contains a *single already
-installed* edition, so there is no index to choose: one image yields one
-flavour. Microsoft publishes eval VHDs for Desktop Experience but not for
-Core, so a Core template generally still has to come from the ISO path.
+**Edition selection.** An ISO carries several editions in `install.wim` and the
+build picks one with `windows_image_index` (`1` = Core, `2` = Desktop
+Experience), which is how one eval ISO yields both the Core and the Desktop
+Experience template. (The retired VHD path could not do this — a VHD holds a
+single installed edition, and Microsoft only published Desktop Experience
+VHDs — which is why Core was always ISO-only.)
 
 - RHEL ISO storage pool: `iso_images` with the following filenames:
   - `rhel-8.10-x86_64-dvd.iso`
@@ -420,7 +436,7 @@ Core, so a Core template generally still has to come from the ISO path.
 - Linux cloud base templates are created at 60 G — the bootstrap resizes the imported disk and verifies it (`bootstrap-base-template.py --disk-size`, default 60 G / `PROXMOX_BASE_DISK_SIZE`); clones inherit it and cloud-init's growpart grows the filesystem on first boot. (Windows cloud templates stay at their VHDX sizes: 40 G / 64 G.)
 - All cloud templates ship both a `std` VGA display and a serial device; Windows additionally enables EMS/SAC on the serial line.
 - CI paths:
-  - `template-*.yml` (one per cloud template): push-triggered build **and** clone-verify for that template — the primary path (badge table above).
-  - `build-templates`: weekly/manual fan-out that re-runs the cloud per-template pipelines serially for drift detection (each template's own badge reflects it). Runs on a GitHub-hosted runner so it doesn't tie up an arc-runner.
-  - `template-*-iso.yml`: per-template ISO pipelines — **disabled**, by-hand only.
+  - `template-*-cloud.yml` (one per Linux cloud template) and `template-windows-*-iso.yml` (one per Windows template): build **and** clone-verify for that template — the primary path (badge table above). Dispatched by `build-templates`; not push-triggered themselves.
+  - `build-templates`: weekly/manual fan-out that re-runs the active per-template pipelines serially for drift detection (each template's own badge reflects it), and routes shared-input pushes to just the pipelines they affect. Runs on a GitHub-hosted runner so it doesn't tie up an arc-runner; `notify-matrix-fanout.yml` announces its failures from an arc-runner.
+  - Linux `template-*-iso.yml`: per-template ISO pipelines — **disabled**, by-hand only.
   - `validate-templates`: static validation (packer fmt/validate, Ansible syntax, pre-commit) on every push.

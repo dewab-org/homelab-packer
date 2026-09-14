@@ -72,7 +72,7 @@
 #     layout; a value containing spaces would read as $null and fail loudly
 #     rather than partially match.
 #   - Wired into every Windows build: the 2022 and 2025 Core and Desktop
-#     Experience ISO builds, and common/cloud-clone-build.pkr.hcl.
+#     Experience ISO builds, and formerly the cloud-clone build (retired 2026-09-13).
 ###############################################################################
 $ErrorActionPreference = 'Stop'
 

@@ -69,7 +69,7 @@
 #     mask a caught failure. 'exit' still runs the finally, so the
 #     transcript is closed either way.
 #   - Wired into every Windows build: the 2022 and 2025 Core and Desktop
-#     Experience ISO builds, and common/cloud-clone-build.pkr.hcl.
+#     Experience ISO builds, and formerly the cloud-clone build (retired 2026-09-13).
 ###############################################################################
 
 # Terminate entire script if exception occurs.

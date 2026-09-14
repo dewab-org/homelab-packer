@@ -61,7 +61,7 @@
 #     would hand the build's verdict to whatever stale exit code the last
 #     native command left behind.
 #   - Wired into every Windows build: the 2022 and 2025 Core and Desktop
-#     Experience ISO builds, and common/cloud-clone-build.pkr.hcl.
+#     Experience ISO builds, and formerly the cloud-clone build (retired 2026-09-13).
 ###############################################################################
 
 $ProgressPreference = "SilentlyContinue"

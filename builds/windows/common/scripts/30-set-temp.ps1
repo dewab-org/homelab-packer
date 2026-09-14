@@ -80,7 +80,7 @@
 #     execute_command ends with 'exit $LastExitCode', which would otherwise
 #     propagate whatever the last native command (reg.exe) left behind.
 #   - Wired into every Windows build: the 2022 and 2025 Core and Desktop
-#     Experience ISO builds, and common/cloud-clone-build.pkr.hcl.
+#     Experience ISO builds, and formerly the cloud-clone build (retired 2026-09-13).
 ###############################################################################
 
 $ProgressPreference = 'SilentlyContinue'

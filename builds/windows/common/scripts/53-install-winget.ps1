@@ -85,7 +85,7 @@
 #
 # NOTES
 #   - WIRED IN: runs in all four ISO builds (Server 2022 and 2025, Core and
-#     Desktop Experience) and in common/cloud-clone-build.pkr.hcl. It stages
+#     Desktop Experience) and formerly in the cloud-clone build (retired 2026-09-13). It stages
 #     winget only; no build installs software through it.
 #   - KNOWN PLATFORM LIMITATION (documented, not a config bug):
 #     Add-AppxPackage FAILS inside a Packer provisioner session with HRESULT
