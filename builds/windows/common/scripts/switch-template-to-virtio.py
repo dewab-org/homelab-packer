@@ -12,7 +12,7 @@ Setup, so the base template must boot on SATA with an e1000 NIC.
 
 DOES NOT CURRENTLY WORK — disabled by default (switch_to_virtio = false).
 
-The theory was that once 03-install-virtio-guest-tools.ps1 had put
+The theory was that once 10-install-virtio-guest-tools.ps1 had put
 viostor/vioscsi/netkvm in the driver store, the disk could simply be moved to
 the virtio-scsi controller. It cannot: a clone of the switched template boots
 straight into the Windows Recovery Environment. Having the driver in the store
