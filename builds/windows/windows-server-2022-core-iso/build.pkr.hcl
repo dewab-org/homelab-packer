@@ -36,6 +36,7 @@ locals {
   build_username              = var.build_username != null ? var.build_username : vault("secret/data/packer", "BUILD_USERNAME")
   build_password              = var.build_password != null ? var.build_password : vault("secret/data/packer", "BUILD_PASSWORD")
   use_iso_file                = var.iso_file != null && var.iso_file != ""
+  enable_cloud_init           = var.cloudbase_init_url != null && var.cloudbase_init_url != ""
   cloudbase_init_url_env      = var.cloudbase_init_url != null ? var.cloudbase_init_url : ""
   cloudbase_init_checksum_env = var.cloudbase_init_checksum != null ? var.cloudbase_init_checksum : ""
   cd_label                    = "PACKER"
@@ -90,7 +91,15 @@ source "proxmox-iso" "windows_server_2022_core" {
   # VirtIO at install time; WindowsPE gets drivers from the attached virtio ISO.
   scsi_controller = "virtio-scsi-pci"
   qemu_agent      = true
-  serials         = ["socket"]
+  # The cloud-init drive. Without it a clone gets no config ISO from Proxmox,
+  # so Cloudbase-Init has no datasource and silently applies nothing: hostname
+  # stays WIN-XXXXXXX, the cloud-init password never lands, and clone-verify
+  # (correctly) refuses to promote the template. The Desktop Experience builds
+  # always had these two lines; the Core builds never did - the gap noted in
+  # August as "expected to fail" and left open. Same expression as Desktop.
+  cloud_init              = local.enable_cloud_init
+  cloud_init_storage_pool = local.enable_cloud_init ? local.storage_pool : null
+  serials                 = ["socket"]
 
   disks {
     type         = "scsi"
