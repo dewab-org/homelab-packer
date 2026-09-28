@@ -57,9 +57,14 @@ Building templates needs the homelab's build plumbing:
   k3s cluster) that runs the per-template build/verify pipelines; they need lab
   network + Vault access. The weekly `build-templates` fan-out runs on
   `ubuntu-latest` (GitHub-hosted) and only dispatches, so it never ties one up.
-- Repo secrets `VAULT_TOKEN` (non-expiring orphan token, policy
-  `github-actions-packer`) and `VAULT_CACERT`; repo var `VAULT_ADDR`. The
-  fan-out dispatches the per-template workflows with `GITHUB_TOKEN`
+- Repo secret `VAULT_CACERT` (the lab CA bundle) and repo var `VAULT_ADDR`.
+  CI authenticates to Vault with **Kubernetes auth** — the arc-runners present
+  their projected service-account token to `auth/kubernetes/role/packer-ci`
+  (policy `github-actions-packer`, 4h tokens). There is deliberately no stored
+  Vault token: the old `VAULT_TOKEN` secret was *not* non-expiring — it died on
+  Vault's 768h default on 2026-08-28 and every scheduled build failed for two
+  weeks before anyone noticed. If that secret still exists in the repo, delete
+  it. The fan-out dispatches the per-template workflows with `GITHUB_TOKEN`
   (`actions: write`).
 
 ## Per-template build → test pipelines
