@@ -178,9 +178,12 @@ CI follows the same rule. Pushes are handled by the per-template pipelines
 (`template-*.yml`), each path-filtered to an allowlist of *only its own build
 inputs*, so a change rebuilds just the affected cloud template(s) — never the
 ISO builds (there are no ISO pipelines) and never on docs (`.md`). The
-`build-templates` workflow no longer runs on push; it is a weekly/manual
-fan-out that re-runs the cloud per-template pipelines (drift detection). ISO
-builds are by-hand only — their `template-*-iso` pipelines are disabled.
+`build-templates` is the weekly/manual fan-out that re-runs every active
+per-template pipeline serially (drift detection) — the seven Linux cloud builds
+and the four Windows ISO builds — and since 2026-09-12 it also owns pushes to
+SHARED inputs, dispatching only the pipelines a change can affect. The Linux
+`template-*-iso` pipelines are by-hand only and disabled; the Windows ISO
+pipelines are enabled, because ISO is the Windows path.
 
 ## Clone verification
 
@@ -433,7 +436,7 @@ VHDs — which is why Core was always ISO-only.)
 - Linux cloud base templates are created at 60 G — the bootstrap resizes the imported disk and verifies it (`bootstrap-base-template.py --disk-size`, default 60 G / `PROXMOX_BASE_DISK_SIZE`); clones inherit it and cloud-init's growpart grows the filesystem on first boot. (Windows cloud templates stay at their VHDX sizes: 40 G / 64 G.)
 - All cloud templates ship both a `std` VGA display and a serial device; Windows additionally enables EMS/SAC on the serial line.
 - CI paths:
-  - `template-*.yml` (one per cloud template): push-triggered build **and** clone-verify for that template — the primary path (badge table above).
-  - `build-templates`: weekly/manual fan-out that re-runs the cloud per-template pipelines serially for drift detection (each template's own badge reflects it). Runs on a GitHub-hosted runner so it doesn't tie up an arc-runner.
-  - `template-*-iso.yml`: per-template ISO pipelines — **disabled**, by-hand only.
+  - `template-*-cloud.yml` (one per Linux cloud template) and `template-windows-*-iso.yml` (one per Windows template): build **and** clone-verify for that template — the primary path (badge table above). Dispatched by `build-templates`; not push-triggered themselves.
+  - `build-templates`: weekly/manual fan-out that re-runs the active per-template pipelines serially for drift detection (each template's own badge reflects it), and routes shared-input pushes to just the pipelines they affect. Runs on a GitHub-hosted runner so it doesn't tie up an arc-runner; `notify-matrix-fanout.yml` announces its failures from an arc-runner.
+  - Linux `template-*-iso.yml`: per-template ISO pipelines — **disabled**, by-hand only.
   - `validate-templates`: static validation (packer fmt/validate, Ansible syntax, pre-commit) on every push.

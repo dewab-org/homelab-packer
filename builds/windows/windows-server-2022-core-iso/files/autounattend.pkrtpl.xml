@@ -5,40 +5,40 @@
             <DriverPaths>
                 <!-- Single storage driver family to avoid duplicate-driver 0x80070103 -->
                 <PathAndCredentials wcm:action="add" wcm:keyValue="A">
-                    <Path>D:\vioscsi\2k25\amd64</Path>
+                    <Path>D:\vioscsi\2k22\amd64</Path>
                 </PathAndCredentials>
                 <PathAndCredentials wcm:action="add" wcm:keyValue="B">
-                    <Path>E:\vioscsi\2k25\amd64</Path>
+                    <Path>E:\vioscsi\2k22\amd64</Path>
                 </PathAndCredentials>
                 <PathAndCredentials wcm:action="add" wcm:keyValue="C">
-                    <Path>F:\vioscsi\2k25\amd64</Path>
+                    <Path>F:\vioscsi\2k22\amd64</Path>
                 </PathAndCredentials>
                 <PathAndCredentials wcm:action="add" wcm:keyValue="D">
-                    <Path>G:\vioscsi\2k25\amd64</Path>
+                    <Path>G:\vioscsi\2k22\amd64</Path>
                 </PathAndCredentials>
                 <PathAndCredentials wcm:action="add" wcm:keyValue="E">
-                    <Path>H:\vioscsi\2k25\amd64</Path>
+                    <Path>H:\vioscsi\2k22\amd64</Path>
                 </PathAndCredentials>
                 <PathAndCredentials wcm:action="add" wcm:keyValue="F">
-                    <Path>I:\vioscsi\2k25\amd64</Path>
+                    <Path>I:\vioscsi\2k22\amd64</Path>
                 </PathAndCredentials>
                 <PathAndCredentials wcm:action="add" wcm:keyValue="G">
-                    <Path>D:\NetKVM\2k25\amd64</Path>
+                    <Path>D:\NetKVM\2k22\amd64</Path>
                 </PathAndCredentials>
                 <PathAndCredentials wcm:action="add" wcm:keyValue="H">
-                    <Path>E:\NetKVM\2k25\amd64</Path>
+                    <Path>E:\NetKVM\2k22\amd64</Path>
                 </PathAndCredentials>
                 <PathAndCredentials wcm:action="add" wcm:keyValue="I">
-                    <Path>F:\NetKVM\2k25\amd64</Path>
+                    <Path>F:\NetKVM\2k22\amd64</Path>
                 </PathAndCredentials>
                 <PathAndCredentials wcm:action="add" wcm:keyValue="J">
-                    <Path>G:\NetKVM\2k25\amd64</Path>
+                    <Path>G:\NetKVM\2k22\amd64</Path>
                 </PathAndCredentials>
                 <PathAndCredentials wcm:action="add" wcm:keyValue="K">
-                    <Path>H:\NetKVM\2k25\amd64</Path>
+                    <Path>H:\NetKVM\2k22\amd64</Path>
                 </PathAndCredentials>
                 <PathAndCredentials wcm:action="add" wcm:keyValue="L">
-                    <Path>I:\NetKVM\2k25\amd64</Path>
+                    <Path>I:\NetKVM\2k22\amd64</Path>
                 </PathAndCredentials>
             </DriverPaths>
         </component>

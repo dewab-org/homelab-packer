@@ -1,5 +1,12 @@
 title = "homelab gitleaks config"
 
+# REQUIRED. Without this, defining [allowlist] here REPLACES gitleaks' built-in
+# ruleset instead of adding to it: the scan then runs with zero rules, finds
+# nothing, and exits 0. Verified by staging a file of AWS keys and GitHub PATs
+# -- the hook waved it through in every repo that carried this file.
+[extend]
+useDefault = true
+
 [allowlist]
 description = "Ignore local environment files and generated local state"
 paths = [
