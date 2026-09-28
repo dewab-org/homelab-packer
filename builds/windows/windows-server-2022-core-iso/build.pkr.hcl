@@ -5,7 +5,13 @@ packer {
       source  = "github.com/hashicorp/proxmox"
     }
     windows-update = {
-      version = ">= 0.18.0"
+      # Pinned to the version the September builds were verified with. The
+      # first CI build after 0.18.5 (released 2026-09-21, "upgrade dependencies")
+      # hung for 4h at the post-CU restart with the guest never returning; the
+      # same media, CU and host rebooted in 4 min under 0.18.4 on 09-14. Not a
+      # proven cause - but it was the only thing that changed, and a plugin that
+      # drives reboots over WinRM is not something to let float on ">=".
+      version = "= 0.18.4"
       source  = "github.com/rgl/windows-update"
     }
   }
@@ -217,8 +223,17 @@ build {
     search_criteria = "IsInstalled=0"
     filters = [
       "exclude:$_.Title -like '*Preview*'",
+      # The plugin author's own release notes warn that KB5007651 (Windows
+      # Security platform) causes reboot loops unless excluded. It was being
+      # offered to the 2025 builds in August.
+      "exclude:$_.Title -like '*KB5007651*'",
       "include:$true",
     ]
+    # A guest that never comes back from a reboot must fail in minutes, not
+    # hours. The plugin default is 4h, which is how one hung restart consumed
+    # the whole 270-minute step on 2026-09-28. At 30m a hang becomes a failed
+    # attempt that build.py retries on a fresh VM - three attempts still fit.
+    restart_timeout = "30m"
   }
 
   provisioner "powershell" {
