@@ -67,7 +67,14 @@ def client(url, user, password, token_id, token_secret):
     # password ticket dies two hours after the last call and proxmoxer renews
     # it with itself. This process is short, but the promote it gates is not.
     p = urllib.parse.urlparse(url)
-    common = dict(verify_ssl=False, port=p.port or 443)
+    # timeout: proxmoxer's default is FIVE seconds per HTTP call, and a guest
+    # agent exec against a Windows clone that is still settling after its
+    # hostname reboot takes longer than that. The first 2025 Core build to get
+    # through cleanup (2026-09-29) was thrown away on exactly this - clone made,
+    # credential VALID, then "Read timed out. (read timeout=5)" on the next
+    # agent call, reported as a harness error and the scratch left unpromoted.
+    # Same value build.py uses for its client.
+    common = dict(verify_ssl=False, port=p.port or 443, timeout=120)
     if token_id and token_secret:
         token_user, sep, token_name = token_id.partition("!")
         if not sep or not token_user or not token_name:
