@@ -19,7 +19,8 @@ and a Windows template can ship with no Cloudbase-Init or no cloud-init drive.
 Only a clone-and-check catches that, so it runs in CI, not by hand.
 
 Connection + auth come from the environment, matching the other scripts:
-PROXMOX_URL / PROXMOX_USERNAME / PROXMOX_PASSWORD / PROXMOX_NODE / PROXMOX_STORAGE.
+PROXMOX_URL, PROXMOX_TOKEN_ID / PROXMOX_TOKEN_SECRET (preferred; falls back to
+PROXMOX_USERNAME / PROXMOX_PASSWORD), PROXMOX_NODE / PROXMOX_STORAGE.
 Exit code is non-zero if any template fails its checks.
 """
 from __future__ import annotations
@@ -61,10 +62,21 @@ def require(value, name):
     return value
 
 
-def client(url, user, password):
+def client(url, user, password, token_id, token_secret):
+    # Token first, for the reason build.py's proxmox_client() spells out: a
+    # password ticket dies two hours after the last call and proxmoxer renews
+    # it with itself. This process is short, but the promote it gates is not.
     p = urllib.parse.urlparse(url)
-    return ProxmoxAPI(p.hostname, user=user, password=password,
-                      verify_ssl=False, port=p.port or 443)
+    common = dict(verify_ssl=False, port=p.port or 443)
+    if token_id and token_secret:
+        token_user, sep, token_name = token_id.partition("!")
+        if not sep or not token_user or not token_name:
+            raise SystemExit(f"PROXMOX_TOKEN_ID must look like user@realm!tokenname, got {token_id!r}")
+        return ProxmoxAPI(p.hostname, user=token_user, token_name=token_name,
+                          token_value=token_secret, **common)
+    if user and password:
+        return ProxmoxAPI(p.hostname, user=user, password=password, **common)
+    raise SystemExit("set PROXMOX_TOKEN_ID/PROXMOX_TOKEN_SECRET (preferred) or PROXMOX_USERNAME/PROXMOX_PASSWORD")
 
 
 def find_node(prox, vm_id, requested):
@@ -338,8 +350,10 @@ def main() -> int:
 
     prox = client(
         require(os.environ.get("PROXMOX_URL"), "PROXMOX_URL"),
-        require(os.environ.get("PROXMOX_USERNAME"), "PROXMOX_USERNAME"),
-        require(os.environ.get("PROXMOX_PASSWORD"), "PROXMOX_PASSWORD"),
+        os.environ.get("PROXMOX_USERNAME"),
+        os.environ.get("PROXMOX_PASSWORD"),
+        os.environ.get("PROXMOX_TOKEN_ID"),
+        os.environ.get("PROXMOX_TOKEN_SECRET"),
     )
     storage = os.environ.get("PROXMOX_STORAGE", "local-lvm")
 

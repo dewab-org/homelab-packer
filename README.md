@@ -25,8 +25,11 @@ Building templates needs the homelab's build plumbing:
 ### Lab services
 
 - **Proxmox VE** target node with API access — VMs are cloned/created here
-  (`PROXMOX_URL`, `PROXMOX_USERNAME`, `PROXMOX_PASSWORD`, `PROXMOX_NODE`,
-  `PROXMOX_STORAGE`, `PROXMOX_ISO_STORAGE`). Storage: a thin pool for templates
+  (`PROXMOX_URL`, `PROXMOX_TOKEN_ID` + `PROXMOX_TOKEN_SECRET` for every API
+  caller — Packer, `build.py`, `clone-verify.py` — with `PROXMOX_USERNAME` +
+  `PROXMOX_PASSWORD` only as a fallback, since a password ticket dies two hours
+  after the last call and a Windows build leaves longer gaps than that;
+  `PROXMOX_NODE`, `PROXMOX_STORAGE`, `PROXMOX_ISO_STORAGE`). Storage: a thin pool for templates
   and an `iso_images` store holding install ISOs and the `virtio-win` ISO.
 - **HashiCorp Vault** (`vault.viking.org`) — every build secret lives in
   `secret/packer` (Proxmox creds, Red Hat/RHN username + password, the
@@ -210,7 +213,7 @@ Checks per clone:
 
 ```sh
 set -a && source .env && set +a
-export PROXMOX_URL=... PROXMOX_USERNAME=... PROXMOX_PASSWORD=... PROXMOX_NODE=...
+export PROXMOX_URL=... PROXMOX_TOKEN_ID=... PROXMOX_TOKEN_SECRET=... PROXMOX_NODE=...
 ./tests/clone-verify.py 9239 9413          # rocky-9 + win-2022 desktop, or any VMIDs
 ```
 

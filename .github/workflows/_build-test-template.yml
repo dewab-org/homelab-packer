@@ -121,7 +121,11 @@ jobs:
           set -euo pipefail
           # Same secret packer's vault() reads at build time. Needed here for the
           # base existence check, build.py's post-build verify, and clone-verify.
-          for k in PROXMOX_URL PROXMOX_USERNAME PROXMOX_PASSWORD PROXMOX_NODE PROXMOX_STORAGE; do
+          # The token pair is what those scripts USE; the username/password stay
+          # exported only as their documented fallback. A password ticket cannot
+          # survive the 2h+ gap a Windows build leaves between API calls (see
+          # proxmox_client() in build.py), and the promote step sits right after.
+          for k in PROXMOX_URL PROXMOX_TOKEN_ID PROXMOX_TOKEN_SECRET PROXMOX_USERNAME PROXMOX_PASSWORD PROXMOX_NODE PROXMOX_STORAGE; do
             v="$(vault kv get -field="$k" secret/packer)"
             echo "::add-mask::$v"
             echo "$k=$v" >> "$GITHUB_ENV"
