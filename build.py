@@ -243,10 +243,28 @@ def generate_build_ssh_keypair() -> tuple[str, str, Path]:
 
 
 def proxmox_client() -> "ProxmoxAPI | None":
+    """
+    API client for the scratch-and-swap steps. Prefers the API token and
+    falls back to the password ONLY when no token is set.
+
+    Not a style preference. A password login is a ticket that lives 2 hours,
+    and proxmoxer renews it by presenting the OLD ticket as the password once
+    it is an hour old - which works only while the old one is still valid.
+    This process makes no API call while Packer runs the build, so after any
+    build longer than two hours the next call re-authenticates with an
+    expired ticket and gets 401 "Couldn't authenticate user". That is how the
+    2025 Desktop run on 2026-09-28 lost its third attempt before it started
+    (2h25 after the previous call), and it is exactly where the PROMOTE step
+    sits after a 2h+ Windows build: build green, template never swapped in.
+    Packer itself already uses the token for the same reason (its tickets
+    died at 2h too). An API token does not expire and needs no renewal.
+    """
     url = os.environ.get("PROXMOX_URL", "")
     user = os.environ.get("PROXMOX_USERNAME", "")
     password = os.environ.get("PROXMOX_PASSWORD", "")
-    if not url or not user or not password:
+    token_id = os.environ.get("PROXMOX_TOKEN_ID", "")
+    token_secret = os.environ.get("PROXMOX_TOKEN_SECRET", "")
+    if not url:
         return None
 
     parsed = urlparse(url)
@@ -256,15 +274,36 @@ def proxmox_client() -> "ProxmoxAPI | None":
     from proxmoxer import ProxmoxAPI
 
     port = parsed.port or (443 if parsed.scheme == "https" else 80)
-    return ProxmoxAPI(
-        parsed.hostname,
-        user=user,
-        password=password,
+    common = dict(
         verify_ssl=False,
         port=port,
         # A full clone of an 80G template is one long-running API call.
         timeout=120,
     )
+    if token_id and token_secret:
+        # PROXMOX_TOKEN_ID is Proxmox's "user@realm!tokenname" form, the same
+        # value the Packer builds consume.
+        token_user, sep, token_name = token_id.partition("!")
+        if not sep or not token_user or not token_name:
+            raise SystemExit(
+                f"PROXMOX_TOKEN_ID must look like user@realm!tokenname, got {token_id!r}"
+            )
+        return ProxmoxAPI(
+            parsed.hostname,
+            user=token_user,
+            token_name=token_name,
+            token_value=token_secret,
+            **common,
+        )
+    if user and password:
+        print(
+            "WARNING: using PROXMOX_USERNAME/PASSWORD for the Proxmox API. That "
+            "session cannot outlive a 2 hour gap between calls; set "
+            "PROXMOX_TOKEN_ID/PROXMOX_TOKEN_SECRET for builds that take longer.",
+            file=sys.stderr,
+        )
+        return ProxmoxAPI(parsed.hostname, user=user, password=password, **common)
+    return None
 
 
 def find_vm(prox, vm_id: str) -> dict | None:
@@ -650,7 +689,7 @@ def run_build_direct(build_dir: Path, common_vars: Path, args: argparse.Namespac
     build_vars = build_dir / "variables.auto.pkrvars.hcl"
     rel = build_dir.relative_to(repo_root())
     print(
-        "WARNING: PROXMOX_URL/USERNAME/PASSWORD not set - building DIRECTLY on the "
+        "WARNING: PROXMOX_URL plus PROXMOX_TOKEN_ID/SECRET (or USERNAME/PASSWORD) not set - building DIRECTLY on the "
         "target VMID. With --overwrite this destroys the existing template BEFORE "
         "the new one exists. Export the PROXMOX_* variables to get the "
         "scratch-and-swap path instead.",
