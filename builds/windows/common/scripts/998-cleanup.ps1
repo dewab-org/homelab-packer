@@ -15,8 +15,10 @@
 #      and protecting the currently running script.
 #   3. ESSENTIAL: enumerates every event log channel with `wevtutil el` and
 #      clears each one.
-#   4. BEST EFFORT: stops wuauserv.
-#   5. ESSENTIAL: purges C:\Windows\SoftwareDistribution\Download.
+#   4. BEST EFFORT: stops wuauserv, UsoSvc, DoSvc and BITS, then waits (at
+#      most 10 minutes) for TiWorker.exe to exit.
+#   5. ESSENTIAL: purges C:\Windows\SoftwareDistribution\Download; anything
+#      refused is retried once after takeown + icacls (see the comment there).
 #      BEST EFFORT: purges the rest of SoftwareDistribution.
 #   6. BEST EFFORT: purges C:\Windows\Prefetch and empties the Recycle Bin.
 #   7. ESSENTIAL: removes downloaded installers from C:\Install by extension
@@ -66,7 +68,8 @@
 #               REPORTED as a WARNING rather than hidden - the temp purges, the
 #               SoftwareDistribution remainder, prefetch, the Recycle Bin
 #               (Clear-RecycleBin throws when already empty), a failure to stop
-#               wuauserv, an unset TEMP variable, non-essential channels
+#               one of the update services or TiWorker outlasting its wait, an
+#               unset TEMP variable, non-essential channels
 #               refusing to clear (analytic/debug channels normally do), and
 #               the zero-deleted / zero-reclaimed cases above.
 #
@@ -482,21 +485,110 @@ try {
         }
     }
 
-    # -- Windows Update service (best effort, but the cache clear is not) -----
-    Write-Host "Stopping Windows Update service..."
-    try {
-        Stop-Service -Name wuauserv -Force -ErrorAction Stop
-        Write-Host "  wuauserv stopped."
+    # -- Windows Update services (best effort, but the cache clear is not) ----
+    # OBSERVED (2026-09-28, Server 2025 Core ISO, the first CI pass to reach
+    # this script): with ONLY wuauserv stopped, one Download subfolder was
+    # undeletable - "Access to the path is denied" - and 25,100 files stayed
+    # behind, ten minutes after the last post-update reboot. That build had
+    # installed the 22 GB 26100 cumulative update in two passes (the first
+    # "completed" in five seconds, i.e. failed, and re-ran). The 2022 builds
+    # emptied the same folder with wuauserv alone.
+    #
+    # A stopped wuauserv is not a quiet Download folder on 2025: the Update
+    # Orchestrator (UsoSvc) restarts wuauserv on demand, Delivery Optimization
+    # (DoSvc) and BITS hold their own handles under Download, and the servicing
+    # stack (TiWorker.exe, started by TrustedInstaller) can still be finishing
+    # the install it was rebooted for. So: stop all four, then wait - bounded -
+    # for TiWorker to go away, and say what was still running if it did not.
+    # TrustedInstaller itself is left alone: killing it mid-servicing corrupts
+    # the component store, which is far worse than a full cache.
+    Write-Host "Stopping Windows Update services..."
+    foreach ($serviceName in @("wuauserv", "UsoSvc", "DoSvc", "BITS")) {
+        $service = Get-Service -Name $serviceName -ErrorAction SilentlyContinue
+        if (-not $service) {
+            Write-Host "  $serviceName : not present on this image."
+            continue
+        }
+        if ($service.Status -eq "Stopped") {
+            Write-Host "  $serviceName : already stopped."
+            continue
+        }
+        try {
+            Stop-Service -Name $serviceName -Force -ErrorAction Stop
+            # Stop-Service returns when the SCM accepts the stop; read the
+            # state back rather than trusting that.
+            $after = (Get-Service -Name $serviceName).Status
+            Write-Host "  $serviceName : $($service.Status) -> $after"
+            if ($after -ne "Stopped") {
+                $warnings.Add("$serviceName did not reach Stopped (is $after) before the Windows Update cache purge")
+            }
+        }
+        catch {
+            $warnings.Add("Could not stop ${serviceName}: $($_.Exception.Message)")
+            Write-Host "  Could not stop ${serviceName}: $($_.Exception.Message)"
+        }
     }
-    catch {
-        $warnings.Add("Could not stop wuauserv: $($_.Exception.Message)")
-        Write-Host "  Could not stop wuauserv: $($_.Exception.Message)"
+
+    $servicingDeadline = (Get-Date).AddMinutes(10)
+    $servicingWaited = $false
+    while ((Get-Process -Name TiWorker -ErrorAction SilentlyContinue) -and (Get-Date) -lt $servicingDeadline) {
+        if (-not $servicingWaited) {
+            Write-Host "  TiWorker.exe (servicing stack) is still running; waiting for it to exit (up to 10 minutes)..."
+            $servicingWaited = $true
+        }
+        Start-Sleep -Seconds 15
+    }
+    if (Get-Process -Name TiWorker -ErrorAction SilentlyContinue) {
+        $warnings.Add("TiWorker.exe was still running after a 10 minute wait; the Windows Update cache purge proceeded anyway")
+        Write-Host "  TiWorker.exe still running after 10 minutes; proceeding anyway."
+    }
+    elseif ($servicingWaited) {
+        Write-Host "  TiWorker.exe exited."
     }
 
     # -- Windows Update cache (essential) -------------------------------------
     Write-Host "Clearing Windows Update cache..."
-    Register-PurgeResult -Label "Windows Update download cache" -Essential -Result (
-        Invoke-PathPurge -Path $updateDownloadPath)
+    $updatePurge = Invoke-PathPurge -Path $updateDownloadPath
+
+    # Second attempt, with ownership. Update payloads are extracted as
+    # TrustedInstaller with ACLs that grant Administrators no delete right, so
+    # a plain Remove-Item is refused even with every service stopped. Take
+    # ownership (an owner can always rewrite the DACL), RESET every DACL in the
+    # tree to what it inherits from Download - which grants Administrators and
+    # SYSTEM full control - and grant BUILTIN\Administrators (by SID, so the
+    # locale does not matter) full control on the top as well, then purge
+    # again. /reset rather than a recursive /grant on purpose: tested on a
+    # 2022 clone with a planted payload whose files carried a protected, EMPTY
+    # DACL, `icacls /grant ... /T` reported "processed 304 files" and changed
+    # nothing on the files (an (OI)(CI) ACE is inheritance metadata to a
+    # file), so even SYSTEM still got "Access to the path is denied"; /reset
+    # /T made the same files deletable at once. Both tools are run through
+    # cmd.exe for the same reason as Invoke-WevtUtil: under
+    # $ErrorActionPreference='Stop' their stderr would otherwise terminate the
+    # script before the retry, and takeown's per-file stdout for tens of
+    # thousands of files is noise, so only exit codes and last lines are kept.
+    # None of this helps with a handle held open by a running process; that
+    # is what stopping the services above is for, and if it was not enough
+    # the failure below names the leftovers.
+    if ($updatePurge.Present -and ($updatePurge.Failed -gt 0 -or $updatePurge.EnumErrors -gt 0)) {
+        Write-Host "  Retrying the Windows Update cache purge after taking ownership..."
+        $takeown = @(& cmd.exe /c "takeown.exe /F `"$updateDownloadPath`" /R /A /D Y 2>&1")
+        Write-Host "  takeown exit $LASTEXITCODE ($($takeown.Count) line(s)); last: $(if ($takeown.Count) { $takeown[-1] } else { '<none>' })"
+        $icaclsReset = @(& cmd.exe /c "icacls.exe `"$updateDownloadPath`" /reset /T /C /Q 2>&1")
+        Write-Host "  icacls /reset exit $LASTEXITCODE; $(($icaclsReset | Select-Object -Last 1) -join ' / ')"
+        $icaclsGrant = @(& cmd.exe /c "icacls.exe `"$updateDownloadPath`" /grant *S-1-5-32-544:(OI)(CI)F /C /Q 2>&1")
+        Write-Host "  icacls /grant exit $LASTEXITCODE; $(($icaclsGrant | Select-Object -Last 1) -join ' / ')"
+        $retry = Invoke-PathPurge -Path $updateDownloadPath
+        $updatePurge = [pscustomobject]@{
+            Path       = $updateDownloadPath
+            Present    = $retry.Present
+            Removed    = $updatePurge.Removed + $retry.Removed
+            Skipped    = $retry.Skipped
+            Failed     = $retry.Failed
+            EnumErrors = $retry.EnumErrors
+        }
+    }
+    Register-PurgeResult -Label "Windows Update download cache" -Essential -Result $updatePurge
 
     Write-Host "Removing leftover Windows update files..."
     Register-PurgeResult -Label "SoftwareDistribution" -Result (
@@ -507,6 +599,16 @@ try {
         $leftovers = @(Get-ChildItem -LiteralPath $updateDownloadPath -Force -Recurse -ErrorAction SilentlyContinue)
         if ($leftovers.Count -gt 0) {
             $failures.Add("$updateDownloadPath still contains $($leftovers.Count) items after cleanup")
+            # Say WHAT is left, so the next reader does not have to rebuild
+            # the VM to find out: top-level entries, their owner, size and
+            # the count underneath. Bounded; this is a failure report, not a
+            # directory listing.
+            foreach ($entry in @(Get-ChildItem -LiteralPath $updateDownloadPath -Force -ErrorAction SilentlyContinue | Select-Object -First 5)) {
+                $owner = "?"
+                try { $owner = (Get-Acl -LiteralPath $entry.FullName -ErrorAction Stop).Owner } catch { $owner = "unreadable ($($_.Exception.Message))" }
+                $count = if ($entry.PSIsContainer) { @(Get-ChildItem -LiteralPath $entry.FullName -Force -Recurse -ErrorAction SilentlyContinue).Count } else { 1 }
+                Write-Host "  LEFTOVER: $($entry.Name) ($count item(s), owner $owner, attributes $($entry.Attributes))"
+            }
         }
         else {
             Write-Host "  Verified empty: $updateDownloadPath"
