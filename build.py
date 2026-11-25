@@ -46,6 +46,17 @@ RETRY_DELAY_SECONDS = 30
 # 9500, so 19xxx is unmistakably scratch and cannot collide with either.
 SCRATCH_OFFSET = 10000
 
+# Packer's proxmox builder uploads every cd_content/cd_files payload as
+# "packer<digits>.iso" on the ISO storage and deletes it in its own cleanup.
+# A build killed at the CI timeout never runs that cleanup, so the seeds piled
+# up: 68 on 2026-11-25, Windows Autounattend.xml with PLAIN-TEXT passwords,
+# kickstarts with rootpw lines, cloud-init user-data with password fields, all
+# readable from the NAS share. Every build run sweeps them first. Only seeds no
+# VM/template config references AND older than this are removed: the longest
+# CI build job is capped at 270 min, so nothing this old belongs to a live one.
+SEED_ISO_PATTERN = re.compile(r"^packer[0-9]+\.iso$")
+SEED_ISO_MIN_AGE_SECONDS = 8 * 3600
+
 
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(
@@ -93,6 +104,18 @@ def parse_args() -> argparse.Namespace:
         "--validate-only",
         action="store_true",
         help="run packer init and packer validate for the selected build target(s)",
+    )
+    parser.add_argument(
+        "--sweep-seed-isos",
+        action="store_true",
+        help="only remove stale Packer seed ISOs (packer<digits>.iso, unreferenced, "
+        f"older than {SEED_ISO_MIN_AGE_SECONDS // 3600}h) from the ISO storage, then exit. "
+        "Every build run also does this first.",
+    )
+    parser.add_argument(
+        "--dry-run",
+        action="store_true",
+        help="with --sweep-seed-isos: list what would be removed, remove nothing",
     )
     parser.add_argument("target", nargs="?", help="build directory or 'all'")
     return parser.parse_args()
@@ -502,6 +525,67 @@ def purge_stranded_build_vm(build_vars: Path) -> None:
     stop_and_destroy(prox, entry, "stranded non-template VM on the target VMID would block the build")
 
 
+def sweep_stale_seed_isos(prox, dry_run: bool = False) -> bool:
+    """Remove Packer seed ISOs a killed build left on the ISO storage.
+
+    A seed is removed only if its name matches SEED_ISO_PATTERN, no VM or
+    template config on any node references it (a template whose CD drive
+    points at a missing ISO makes every clone fail to start), and it is older
+    than SEED_ISO_MIN_AGE_SECONDS. Each delete is read back. Returns False if
+    the sweep could not run or any delete did not take; callers treat that as
+    a warning, never as a reason to skip a build.
+    """
+    storage = os.environ.get("PROXMOX_ISO_STORAGE", "iso_images")
+    try:
+        nodes = [n["node"] for n in prox.nodes.get() if n.get("status") == "online"]
+        if not nodes:
+            raise RuntimeError("no online Proxmox node")
+        node = nodes[0]
+        referenced: set[str] = set()
+        for entry in prox.cluster.resources.get(type="vm"):
+            cfg = vm_config(prox, entry["node"], entry["vmid"]) or {}
+            for value in cfg.values():
+                referenced.update(re.findall(r"packer[0-9]+\.iso", str(value)))
+        content = prox.nodes(node).storage(storage).content.get(content="iso")
+    except Exception as exc:
+        print(f"WARNING: seed-ISO sweep skipped, cannot read Proxmox: {exc}", file=sys.stderr)
+        return False
+
+    now = time.time()
+    stale = []
+    for item in content:
+        name = str(item.get("volid", "")).split("/")[-1]
+        if not SEED_ISO_PATTERN.match(name) or name in referenced:
+            continue
+        if now - float(item.get("ctime", now)) < SEED_ISO_MIN_AGE_SECONDS:
+            continue
+        stale.append(item["volid"])
+
+    verb = "would remove" if dry_run else "removing"
+    print(f"seed-ISO sweep on {storage}: {len(stale)} stale, {len(referenced)} referenced; {verb}", flush=True)
+    ok = True
+    for volid in sorted(stale):
+        print(f"  {verb} {volid}")
+        if dry_run:
+            continue
+        try:
+            prox.nodes(node).storage(storage).content(volid).delete()
+        except Exception as exc:
+            print(f"  ERROR: could not remove {volid}: {exc}", file=sys.stderr)
+            ok = False
+    if not dry_run and stale:
+        try:
+            left = {i.get("volid") for i in prox.nodes(node).storage(storage).content.get(content="iso")}
+        except Exception as exc:
+            print(f"  ERROR: cannot read back {storage}: {exc}", file=sys.stderr)
+            return False
+        survivors = sorted(set(stale) & left)
+        if survivors:
+            print(f"  ERROR: still present after delete: {', '.join(survivors)}", file=sys.stderr)
+            ok = False
+    return ok
+
+
 def clear_scratch(prox, scratch: str) -> bool:
     """Make the scratch VMID free. Anything there is ours by construction."""
     try:
@@ -829,12 +913,19 @@ def main() -> int:
     root = repo_root()
     common_vars = root / "variables.auto.pkrvars.hcl"
 
-    if not args.target:
+    if not args.target and not args.sweep_seed_isos:
         print(
             "Usage: build.py [--ask] [--overwrite] [--skip] "
             "[--init-only|--validate-only] [all|cloud|iso|all-linux|<build-dir>]"
         )
         return 1
+
+    if args.sweep_seed_isos:
+        prox = proxmox_client()
+        if prox is None:
+            print("ERROR: --sweep-seed-isos needs PROXMOX_URL and credentials", file=sys.stderr)
+            return 1
+        return 0 if sweep_stale_seed_isos(prox, dry_run=args.dry_run) else 1
 
     targets = resolve_targets(args.target)
     if not targets:
@@ -852,6 +943,11 @@ def main() -> int:
     # Keep going on failure: one flaky build must not abort the remaining
     # targets in a full run. Failures are reported at the end and the exit
     # code stays non-zero. init/validate still fail fast.
+    if not (args.init_only or args.validate_only):
+        prox = proxmox_client()
+        if prox is not None:
+            sweep_stale_seed_isos(prox)
+
     failures: list[str] = []
     for build in targets:
         build_dir = root / build
