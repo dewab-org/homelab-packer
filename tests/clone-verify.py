@@ -204,6 +204,24 @@ def verify_linux(prox, node, vm_id, clone_name, ip, key_path):
     else:
         log("    sudo OK")
 
+    # Host keys: the clone must have generated its own (the template ships
+    # none), and cloud-init must be told to keep them on a later new-instance
+    # boot (ssh_deletekeys false, baked in by the build). Read with
+    # cloud-init's own interpreter/loader: on EL8 that is platform-python.
+    keys_check = (
+        "ls /etc/ssh/ssh_host_ed25519_key.pub >/dev/null 2>&1 && echo KEYS_OK; "
+        "sudo -n \"$(sed -n '1s/^#!//p' \"$(command -v cloud-init)\")\" -c "
+        "\"from cloudinit import util; print('DELETEKEYS=%s' % "
+        "util.read_conf_with_confd('/etc/cloud/cloud.cfg').get('ssh_deletekeys'))\""
+    )
+    rc, out = ssh(ip, key_path, CIUSER, keys_check)
+    if "KEYS_OK" not in out:
+        fails.append("no SSH host keys generated on first boot")
+    if "DELETEKEYS=False" not in out:
+        fails.append(f"cloud-init ssh_deletekeys is not false: {out[-120:]}")
+    if "KEYS_OK" in out and "DELETEKEYS=False" in out:
+        log("    host keys generated, ssh_deletekeys false")
+
     # Cross-distro CA check. The trust anchors live in different places
     # (RHEL: /etc/pki/ca-trust/source/anchors; Debian/Ubuntu:
     # /usr/local/share/ca-certificates), and `trust list` (p11-kit) is not on a

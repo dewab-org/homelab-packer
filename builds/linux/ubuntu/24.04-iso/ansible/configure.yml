@@ -102,6 +102,35 @@
       ansible.builtin.command: update-ca-certificates
       changed_when: true
 
+    # Keep host keys when cloud-init later sees a new instance. Proxmox derives
+    # the NoCloud instance-id from the VM's cloud-init settings, so changing them
+    # makes the next cold boot a "new instance", and with the image default
+    # (ssh_deletekeys: true) cloud-init deletes and regenerates every host key.
+    # That is how edge-proxy-1 and bastion-1 came back from the 2026-10-20 power
+    # outage with new keys. Clones still get unique keys: this template ships
+    # with none, and cloud-init generates any missing key (ssh_genkeytypes)
+    # regardless of ssh_deletekeys.
+    - name: Stop cloud-init regenerating SSH host keys on clones
+      ansible.builtin.copy:
+        dest: /etc/cloud/cloud.cfg.d/99-keep-ssh-host-keys.cfg
+        owner: root
+        group: root
+        mode: "0644"
+        content: |
+          # Managed by homelab.packer (baked into the template).
+          ssh_deletekeys: false
+
+    # Read back with cloud-init's own loader and interpreter (its shebang: on
+    # EL8 that is platform-python, not the python3 on PATH).
+    - name: Read back cloud-init's effective ssh_deletekeys
+      ansible.builtin.shell: >-
+        "$(sed -n '1s/^#!//p' "$(command -v cloud-init)")" -c
+        "from cloudinit import util;
+        print(util.read_conf_with_confd('/etc/cloud/cloud.cfg').get('ssh_deletekeys'))"
+      register: ci_deletekeys
+      changed_when: false
+      failed_when: ci_deletekeys.stdout | trim | lower != 'false'
+
     - name: Find SSH host keys
       ansible.builtin.find:
         paths: /etc/ssh
