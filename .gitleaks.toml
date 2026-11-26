@@ -1,11 +1,111 @@
 title = "homelab gitleaks config"
 
-# REQUIRED. Without this, defining [allowlist] here REPLACES gitleaks' built-in
-# ruleset instead of adding to it: the scan then runs with zero rules, finds
-# nothing, and exits 0. Verified by staging a file of AWS keys and GitHub PATs
-# -- the hook waved it through in every repo that carried this file.
+# REQUIRED. Without this, defining [allowlist] here replaces gitleaks' built-in
+# ruleset instead of adding to it: the scan then runs with ZERO rules, detects
+# nothing, and exits 0. Verified by staging a file full of AWS keys and GitHub
+# PATs -- the hook passed it.
 [extend]
 useDefault = true
+
+# Gitleaks' default ruleset is provider-shaped: it knows AWS keys, GitHub PATs
+# and the like, and its generic-api-key rule wants high entropy. A hand-typed
+# password looks like none of them. `password: "P@ssw0rd"` in secrets.yml
+# scanned completely clean against the full default ruleset (verified with
+# gitleaks 8.30.1, 2026-11-25) -- too short, too low-entropy, no provider
+# prefix. Nothing in this repo would ever have failed on it.
+#
+# This rule closes that gap: an inline credential assignment in YAML, INI or
+# shell where the value is a literal rather than a template expression or a
+# lookup. The allowlist is what keeps it usable -- every legitimate way this
+# estate writes a credential *reference* has to stay quiet, or the hook gets
+# switched off and then protects nothing at all.
+[[rules]]
+id = "homelab-inline-plaintext-credential"
+description = "Inline plaintext credential assignment (read it from Vault instead)"
+# (?m) so the end-of-line anchor binds per line rather than per file -- without
+# it the rule only ever matches the last line of a file.
+# The leading (?:^|[^A-Za-z0-9]) rather than \b: \b does not match between "_"
+# and "p", so a plain \b misses `admin_password:` and `db_password=` entirely.
+# [ \t]* rather than \s* around the value: \s* matches NEWLINES, so a match
+# ran past the end of its line and swallowed following blank lines and
+# comments. That defeats every allowlist pattern anchored with $ -- e.g.
+# `password: yourpassword` followed by a comment line stayed a finding
+# because the allowlist saw `password: yourpassword\n# ...` instead. Same
+# family of bug as the (?i) leak below: the rule still fires, so it looks
+# healthy, while the allowlist silently stops applying.
+regex = '''(?im)(?:^|[^A-Za-z0-9])(?:passwd|password|pass_?phrase|secret|api[_-]?key|apikey|auth[_-]?token|access[_-]?token|private[_-]?key)[ \t]*[:=][ \t]*["']?([^\s"'`]{6,})["']?[ \t]*(?:#.*)?$'''
+secretGroup = 1
+keywords = [
+  "passwd", "password", "passphrase", "pass_phrase",
+  "secret", "api_key", "api-key", "apikey",
+  "auth_token", "auth-token", "access_token", "access-token",
+  "private_key", "private-key",
+]
+
+[rules.allowlist]
+regexTarget = "match"
+# Test fixtures, scoped to THIS rule only -- deliberately not in the global
+# [allowlist] below, so gitleaks' default provider rules keep policing these
+# paths. A molecule scenario's `vagrant` password is noise; a real AWS key
+# committed under tests/ is not, and must still fail.
+paths = [
+  '''(^|/)molecule/''',
+  '''(^|/)(test|tests|fixtures|testdata)/''',
+]
+# Every pattern below uses SCOPED (?i:...) groups, never a leading (?i).
+# Gitleaks ORs these regexes into a single pattern, so a bare leading (?i)
+# leaks into every *later* alternative: it silently turned the UPPER_SNAKE
+# pattern below case-insensitive, which then matched any bare word value and
+# disabled this entire rule. The rule reported zero findings on a file full of
+# plaintext passwords. Keep the flags scoped.
+regexes = [
+  # Jinja/Go templates and shell expansion -- a reference, not a secret.
+  '''\{\{''',
+  '''\$\{?[A-Za-z_(]''',
+  # Ansible idioms: omit, lookups, vaulted values.
+  '''\bomit\b''',
+  '''\blookup\(''',
+  '''!vault''',
+  '''\$ANSIBLE_VAULT''',
+  # Names of credential FIELDS rather than values: `secret_key: VAULT_ADDR`,
+  # `password_key: DWHICKER_PAM_PASSWORD`. The estate's AWX config-as-code is
+  # built almost entirely out of these.
+  '''(?i:(?:secret|password|token|key)_(?:key|field|name|var|path|id)\s*[:=])''',
+  # Value is an UPPER_SNAKE identifier -- a Vault field name, not a secret.
+  '''[:=]\s*["']?[A-Z][A-Z0-9_]{5,}["']?\s*$''',
+  # Value is an EXPRESSION, not a literal: a dotted path (`local.proxmox_password`,
+  # `.FLUME_PASSWORD`), a call (`require_auth(args)`), or an identifier that
+  # itself names a credential (`kea_password`, `EnvSecret`). Deliberately
+  # narrow -- a bare word value like `hunter2` is still a finding.
+  '''[:=]\s*["']?\.?[A-Za-z_][A-Za-z0-9_]*(?:\.[A-Za-z_][A-Za-z0-9_]*)+''',
+  '''[:=]\s*["']?[A-Za-z_][A-Za-z0-9_.]*\(''',
+  '''(?i:[:=]\s*["']?[a-z_][a-z0-9_]*_(?:password|passwd|secret|key|token|phrase)["']?\s*,?\s*$)''',
+  '''[:=]\s*["']?[A-Za-z][A-Za-z0-9_]*(?:Secret|Password|Token|Key)["']?\s*,?\s*$''',
+  # `vault:secret/kea#CTRL_HTTP_PASSWORD` -- a pointer to a secret store.
+  '''(?i:[:=]\s*["']?(?:vault|vaults?|env|file|aws|gcp):)''',
+  # Placeholders this estate actually writes: `postgres-change-me`,
+  # `kea-change-me`, `REPLACE_ME`, `<key>`.
+  '''(?i:[\w.-]*change[_-]?me)''',
+  '''(?i:replace[_-]?me)''',
+  # `<key>`, `<your-token>` anywhere in the value -- usage text, not a value.
+  # Not anchored to end-of-line: these show up mid-line in CLI help comments
+  # like `[-e truenas_api_key=<key>]`.
+  '''[:=]\s*["']?<[^>]*>''',
+  # jq / shell expressions that read a variable: `password: .FLUME_PASSWORD,`
+  '''[:=]\s*\.[A-Za-z_][A-Za-z0-9_]*''',
+  # Ansible/config enum values that happen to sit beside a credential key,
+  # e.g. `update_password: on_create`.
+  '''(?i:[:=]\s*["']?(?:on_create|on_?change|always|never|auto|ask|yes|no|prompt)["']?\s*$)''',
+  # Kubernetes Secret *names* referenced by a `*_secret:` key
+  # (`awx_tls_secret: awx-tls`, `aap_admin_secret: ap-admin-password`): a
+  # DNS-1123 resource name, not a value. Requires BOTH the `_secret` key
+  # suffix and a lowercase kebab value -- a bare kebab value on any other key
+  # (`password: correct-horse-staple`) is still a finding.
+  '''(?i:_secrets?\s*[:=]\s*["']?[a-z][a-z0-9]*(?:-[a-z0-9]+)+["']?\s*(?:#.*)?$)''',
+  # Empty / null / placeholder values.
+  '''[:=]\s*["']{0,2}\s*$''',
+  '''(?i:[:=]\s*["']?(?:null|none|~|false|true|changeme|change_me|placeholder|example|redacted|your[_-]?\w*|xxx+|\.\.\.|<[^>]*>)["']?\s*$)''',
+]
 
 [allowlist]
 description = "Ignore local environment files and generated local state"
@@ -14,4 +114,16 @@ paths = [
   '''(^|/)\.env\..*$''',
   '''(^|/)\.venv/''',
   '''(^|/)\.work/''',
+  # Vendored dependencies: third-party source and its own test fixtures, not
+  # ours to fix. The pre-commit hook only ever sees staged files, so these are
+  # irrelevant there -- but `gitleaks dir` (the audit command in CLAUDE.md)
+  # walks them and drowned in 600+ hits per repo before this.
+  '''(^|/)\.ansible/''',
+  '''(^|/)collections/ansible_collections/''',
+  '''(^|/)vendor/''',
+  '''(^|/)node_modules/''',
+  # Vendored upstream documentation trees (docs/stork-v2.2.1/,
+  # docs/kea-3.0.2/): the vendor's own example credentials in their published
+  # HTML. Not ours, and not secrets.
+  '''(^|/)docs/[a-z0-9_-]+-v?[0-9][0-9a-z.]*/''',
 ]
