@@ -40,7 +40,7 @@ on:
   workflow_dispatch:
     inputs:
       templates:
-        description: "Pipeline workflow names to run (space-separated; blank = all 11: 7 Linux cloud + 4 Windows ISO)"
+        description: "Pipeline workflow names to run (space-separated; blank = all automatic ones: 7 Linux cloud, plus 4 Windows ISO unless WINDOWS_PAUSED)"
         required: false
         default: ""
         type: string
@@ -83,7 +83,21 @@ jobs:
           # cleanly. ~2h each, so they run LAST.
           WINDOWS="template-windows-2022-core-iso template-windows-2022-desktop-experience-iso \
                    template-windows-2025-core-iso template-windows-2025-desktop-experience-iso"
-          ALL="$LINUX $WINDOWS"
+          # PAUSED 2026-11-25 (Daniel): Windows templates are not needed right
+          # now and each build is ~2h of an 8 GB, 4-core VM on pve03. While
+          # this is true, the weekly schedule, a blank dispatch and a push to
+          # builds/windows/common rebuild Linux only. Windows still builds when
+          # NAMED in a workflow_dispatch `templates` list, or by dispatching a
+          # template-windows-*-iso workflow directly. Set to false to resume;
+          # the existing Windows templates go stale (unpatched) in the meantime.
+          WINDOWS_PAUSED=true
+          if [ "$WINDOWS_PAUSED" = true ]; then
+            echo "::notice::Windows template builds are paused (WINDOWS_PAUSED=true); automatic runs build Linux only."
+            AUTO_WINDOWS=""
+          else
+            AUTO_WINDOWS="$WINDOWS"
+          fi
+          ALL="$LINUX $AUTO_WINDOWS"
 
           wfs="${{ github.event.inputs.templates }}"
           if [ -n "$wfs" ]; then
@@ -113,7 +127,7 @@ jobs:
                 wfs="$ALL"
               else
                 echo "$changed" | grep -qE '^builds/linux/(ansible|common)/' && wfs="$wfs $LINUX"
-                echo "$changed" | grep -qE '^builds/windows/common/'          && wfs="$wfs $WINDOWS"
+                echo "$changed" | grep -qE '^builds/windows/common/'          && wfs="$wfs $AUTO_WINDOWS"
               fi
             fi
           fi
